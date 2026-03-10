@@ -1,0 +1,114 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Kora",
+  "projectDescription": "A multi-threaded, embeddable, memory-safe cache engine with RESP2 protocol compatibility, JSON document database, vector search, and CDC capabilities.",
+  "theme": "aspen",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/threading-model",
+              "concepts/sharding",
+              "concepts/resp-protocol"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/key-value-store",
+              "features/document-database",
+              "features/vector-search",
+              "features/change-data-capture",
+              "features/pubsub",
+              "features/persistence"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/configuration",
+              "operations/monitoring",
+              "operations/performance",
+              "operations/security"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/embedded-mode",
+              "development/building-from-source",
+              "development/contributing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": [
+              "api/string-commands",
+              "api/key-commands",
+              "api/list-commands",
+              "api/hash-commands",
+              "api/set-commands",
+              "api/document-commands",
+              "api/vector-commands",
+              "api/cdc-commands",
+              "api/pubsub-commands",
+              "api/server-commands"
+            ]
+          },
+          {
+            "group": "Embedded API",
+            "pages": [
+              "api/embedded/database",
+              "api/embedded/configuration"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-threaded shard-affinity I/O architecture",
+    "RESP2 protocol compatibility with Redis clients",
+    "JSON document database with secondary indexes and WHERE queries",
+    "HNSW vector search with multiple distance metrics",
+    "Change data capture with per-shard ring buffers",
+    "Pub/sub messaging with pattern matching",
+    "WAL and RDB persistence with LZ4 compression",
+    "Embeddable library mode for in-process use",
+    "Built-in observability with hot-key detection and metrics"
+  ],
+  "publicApiSurface": [
+    "String commands: GET, SET, GETSET, APPEND, STRLEN, INCR, DECR, INCRBY, DECRBY, MGET, MSET, SETNX",
+    "Key commands: DEL, EXISTS, EXPIRE, PEXPIRE, PERSIST, TTL, PTTL, TYPE, KEYS, SCAN, DBSIZE, FLUSHDB",
+    "List commands: LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, LINDEX",
+    "Hash commands: HSET, HGET, HDEL, HGETALL, HLEN, HEXISTS, HINCRBY",
+    "Set commands: SADD, SREM, SMEMBERS, SISMEMBER, SCARD",
+    "Document commands: DOC.CREATE, DOC.SET, DOC.GET, DOC.FIND, DOC.COUNT, DOC.CREATEINDEX, DOC.DROPINDEX",
+    "Vector commands: VEC.ADD, VEC.SEARCH, VEC.DELETE",
+    "CDC commands: CDC.SUBSCRIBE, CDC.READ, CDC.ACK",
+    "Pub/Sub commands: SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, PUBLISH",
+    "Server commands: PING, ECHO, INFO",
+    "Embedded API: Database::open(), get(), set(), hset(), doc_find(), vec_search()"
+  ]
+}
