@@ -1,0 +1,363 @@
+---
+title: CDC Commands
+description: Change Data Capture commands in Kora
+---
+
+Change Data Capture (CDC) allows you to track all mutations in the database. Kora captures SET, DEL, HSET, LPUSH, SADD, and all write operations as events in a per-shard ring buffer.
+
+## CDC.GROUP CREATE
+
+Create a consumer group for CDC events.
+
+**Syntax**
+```
+CDC.GROUP CREATE key group start_seq
+```
+
+<ParamField path="key" type="string" required>
+  The CDC stream key (use "*" for all events)
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  The consumer group name
+</ParamField>
+
+<ParamField path="start_seq" type="integer" required>
+  Starting sequence number (0 = from beginning, $ = from next event)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the consumer group was created successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> CDC.GROUP CREATE * mygroup 0
+OK
+redis-cli> CDC.GROUP CREATE users:* analytics $
+OK
+```
+
+**Time complexity:** O(1)
+
+**Notes:**
+- Consumer groups enable at-least-once delivery semantics
+- Multiple consumers can read from the same group
+- Each group maintains independent cursors and pending entries
+
+---
+
+## CDC.GROUP READ
+
+Read CDC events as part of a consumer group.
+
+**Syntax**
+```
+CDC.GROUP READ key group consumer count
+```
+
+<ParamField path="key" type="string" required>
+  The CDC stream key pattern
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  The consumer group name
+</ParamField>
+
+<ParamField path="consumer" type="string" required>
+  The consumer name within the group
+</ParamField>
+
+<ParamField path="count" type="integer" required>
+  Maximum number of events to read
+</ParamField>
+
+**Return value**
+
+<ResponseField name="events" type="array">
+  Array of CDC events (seq, key, operation, value, timestamp)
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> CDC.GROUP READ * mygroup consumer1 10
+1) 1) (integer) 1001
+   2) "user:123"
+   3) "SET"
+   4) "{\"name\":\"Alice\"}"
+   5) (integer) 1678901234
+2) 1) (integer) 1002
+   2) "user:124"
+   3) "DEL"
+   4) (nil)
+   5) (integer) 1678901235
+```
+
+**Time complexity:** O(N) where N is the number of events read
+
+**Event format:**
+- `[0]` - Sequence number (monotonically increasing)
+- `[1]` - Key affected
+- `[2]` - Operation type (SET, DEL, HSET, HDEL, LPUSH, SADD, etc.)
+- `[3]` - Value (for SET operations) or null
+- `[4]` - Unix timestamp in seconds
+
+---
+
+## CDC.ACK
+
+Acknowledge processed CDC events.
+
+**Syntax**
+```
+CDC.ACK key group seq [seq ...]
+```
+
+<ParamField path="key" type="string" required>
+  The CDC stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  The consumer group name
+</ParamField>
+
+<ParamField path="seq" type="integer" required>
+  One or more sequence numbers to acknowledge
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of events acknowledged
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> CDC.ACK * mygroup 1001 1002
+(integer) 2
+redis-cli> CDC.ACK users:* analytics 5000
+(integer) 1
+```
+
+**Time complexity:** O(N) where N is the number of sequences to acknowledge
+
+**Notes:**
+- Acknowledged events are removed from the pending entries list
+- Unacknowledged events may be redelivered to other consumers
+- ACK is idempotent (acknowledging already-acked events is safe)
+
+---
+
+## CDC.PENDING
+
+List pending (unacknowledged) CDC events for a consumer group.
+
+**Syntax**
+```
+CDC.PENDING key group
+```
+
+<ParamField path="key" type="string" required>
+  The CDC stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  The consumer group name
+</ParamField>
+
+**Return value**
+
+<ResponseField name="pending" type="array">
+  Array of pending events with delivery count and idle time
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> CDC.PENDING * mygroup
+1) 1) (integer) 1001
+   2) "consumer1"
+   3) (integer) 1
+   4) (integer) 5000
+2) 1) (integer) 1002
+   2) "consumer1"
+   3) (integer) 2
+   4) (integer) 10000
+```
+
+**Time complexity:** O(N) where N is the number of pending entries
+
+**Pending entry format:**
+- `[0]` - Sequence number
+- `[1]` - Consumer name that last claimed the event
+- `[2]` - Delivery count (how many times it was read)
+- `[3]` - Idle time in milliseconds since last delivery
+
+---
+
+## CDCPOLL
+
+Poll CDC events from a shard (low-level, cursor-based).
+
+**Syntax**
+```
+CDCPOLL cursor count
+```
+
+<ParamField path="cursor" type="integer" required>
+  The sequence number to start reading from
+</ParamField>
+
+<ParamField path="count" type="integer" required>
+  Maximum number of events to return
+</ParamField>
+
+**Return value**
+
+<ResponseField name="events" type="array">
+  Array of CDC events
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> CDCPOLL 0 100
+1) 1) (integer) 1
+   2) "key1"
+   3) "SET"
+   4) "value1"
+   5) (integer) 1678901234
+2) 1) (integer) 2
+   2) "key2"
+   3) "DEL"
+   4) (nil)
+   5) (integer) 1678901235
+```
+
+**Time complexity:** O(N) where N is the number of events polled
+
+**Notes:**
+- CDCPOLL is a low-level command for custom CDC consumers
+- Does not provide at-least-once guarantees (use consumer groups for that)
+- Useful for tailing the CDC stream or implementing custom replication
+
+---
+
+## CDC Ring Buffer
+
+### Configuration
+
+The CDC ring buffer is configured per-shard:
+
+- **Buffer size:** 10,000 events per shard (default)
+- **Retention:** Events are evicted when the buffer is full (FIFO)
+- **Sequence numbers:** Monotonically increasing, never reused
+- **Gap detection:** Consumers detect if they've fallen too far behind
+
+### Captured Operations
+
+The following operations generate CDC events:
+
+**String operations:**
+- SET, GETSET, APPEND, INCR, DECR, INCRBY, DECRBY
+
+**Key operations:**
+- DEL, RENAME, RENAMENX, UNLINK
+
+**List operations:**
+- LPUSH, RPUSH, LPOP, RPOP, LSET, LREM, LTRIM
+
+**Hash operations:**
+- HSET, HDEL, HINCRBY, HINCRBYFLOAT
+
+**Set operations:**
+- SADD, SREM, SPOP, SMOVE
+
+**Document operations:**
+- DOC.SET, DOC.MSET, DOC.UPDATE, DOC.DEL
+
+---
+
+## Use Cases
+
+### Database Replication
+
+```bash
+# On replica: continuously poll CDC events and replay
+while true; do
+  events=$(redis-cli CDCPOLL $cursor 100)
+  # Process and replay events
+  cursor=$next_seq
+done
+```
+
+### Audit Logging
+
+```bash
+# Create consumer group for audit trail
+redis-cli CDC.GROUP CREATE * audit 0
+
+# Read and log all mutations
+redis-cli CDC.GROUP READ * audit logger1 100
+# Write to audit log
+redis-cli CDC.ACK * audit $seqs
+```
+
+### Cache Invalidation
+
+```bash
+# Track changes to user data
+redis-cli CDC.GROUP CREATE users:* invalidator $
+redis-cli CDC.GROUP READ users:* invalidator cache1 10
+# Invalidate application cache
+redis-cli CDC.ACK users:* invalidator $seqs
+```
+
+### Stream Processing
+
+```bash
+# Feed CDC events to stream processor
+redis-cli CDC.GROUP CREATE * processor 0
+redis-cli CDC.GROUP READ * processor worker1 1000
+# Process batch
+redis-cli CDC.ACK * processor $seqs
+```
+
+---
+
+## Consumer Group Guarantees
+
+### At-Least-Once Delivery
+
+- Events are pending until acknowledged
+- Consumers can fail and restart without data loss
+- Pending events can be claimed by other consumers
+
+### Ordering
+
+- Events are delivered in sequence number order
+- Per-key ordering is guaranteed
+- Cross-key ordering is eventual within a shard
+
+### Failover
+
+- Consumer groups survive server restarts (if persistence enabled)
+- Pending entries are preserved
+- Idle consumers can be detected via PENDING command
+
+---
+
+## Comparison with Redis Streams
+
+Kora CDC differs from Redis Streams (XREAD, XGROUP) in several ways:
+
+- Automatic event capture (no manual XADD needed)
+- Ring buffer eviction instead of memory-based trimming
+- Simpler command interface (3 commands vs. 15+)
+- Per-shard instead of per-stream
+- Designed for change data capture specifically

@@ -1,0 +1,298 @@
+---
+title: Configuration
+description: Configuration options for the embedded Kōra database
+---
+
+The `Config` struct controls how the embedded database is initialized, including worker thread count and shard partitioning.
+
+## Config Struct
+
+```rust
+pub struct Config {
+    /// Number of shard worker threads to spawn.
+    ///
+    /// Each shard owns an independent key-space partition and runs on its own
+    /// OS thread, so this value controls both parallelism and memory partitioning.
+    pub shard_count: usize,
+}
+```
+
+## Default Configuration
+
+```rust
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            shard_count: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        }
+    }
+}
+```
+
+The default configuration sets `shard_count` to the number of available hardware threads, which is a good starting point for most workloads. If the system's parallelism cannot be determined, it defaults to 4 shards.
+
+## Configuration Options
+
+### Shard Count
+
+The `shard_count` field determines how many worker threads the database spawns. Each shard:
+
+- Owns an independent partition of the key-space
+- Runs on its own OS thread
+- Processes commands without locks (shared-nothing architecture)
+- Maintains its own memory and data structures
+
+**Choosing the right shard count:**
+
+- **Higher shard count:** Better parallelism for multi-threaded workloads, but more memory overhead
+- **Lower shard count:** Less memory overhead, but may bottleneck under high concurrency
+- **Recommended:** Start with the default (number of CPU cores) and tune based on your workload
+
+## Usage Examples
+
+### Using Default Configuration
+
+```rust
+use kora_embedded::{Config, Database};
+
+// Uses default configuration (CPU core count)
+let db = Database::open(Config::default());
+```
+
+### Custom Shard Count
+
+```rust
+use kora_embedded::{Config, Database};
+
+// Explicitly set 8 shards
+let db = Database::open(Config {
+    shard_count: 8,
+});
+```
+
+### Low-Resource Configuration
+
+```rust
+use kora_embedded::{Config, Database};
+
+// Minimal configuration for embedded devices or testing
+let db = Database::open(Config {
+    shard_count: 2,
+});
+```
+
+### High-Throughput Configuration
+
+```rust
+use kora_embedded::{Config, Database};
+
+// High shard count for maximum parallelism
+// Good for servers with many CPU cores
+let db = Database::open(Config {
+    shard_count: 16,
+});
+```
+
+### Dynamic Configuration Based on System
+
+```rust
+use kora_embedded::{Config, Database};
+use std::thread;
+
+// Get CPU count and allocate 2 shards per core
+let cpu_count = thread::available_parallelism()
+    .map(|n| n.get())
+    .unwrap_or(4);
+
+let db = Database::open(Config {
+    shard_count: cpu_count * 2,
+});
+```
+
+### Testing Configuration
+
+```rust
+use kora_embedded::{Config, Database};
+
+#[test]
+fn test_database_operations() {
+    // Use minimal shards for faster test execution
+    let db = Database::open(Config { shard_count: 2 });
+    
+    db.set("test_key", b"test_value");
+    assert_eq!(db.get("test_key"), Some(b"test_value".to_vec()));
+}
+```
+
+## Multi-Threaded Access
+
+The `Database` struct is thread-safe and can be wrapped in an `Arc` for shared access across threads:
+
+```rust
+use kora_embedded::{Config, Database};
+use std::sync::Arc;
+use std::thread;
+
+let db = Arc::new(Database::open(Config { shard_count: 4 }));
+let mut handles = vec![];
+
+for t in 0..4 {
+    let db = db.clone();
+    handles.push(thread::spawn(move || {
+        for i in 0..100 {
+            let key = format!("t{}:k{}", t, i);
+            let val = format!("v{}", i);
+            db.set(&key, val.as_bytes());
+            assert_eq!(db.get(&key), Some(val.into_bytes()));
+        }
+    }));
+}
+
+for h in handles {
+    h.join().unwrap();
+}
+```
+
+## Architecture Notes
+
+### Shared-Nothing Design
+
+Each shard worker thread:
+
+1. **Receives commands** via an `mpsc` channel from the calling thread
+2. **Processes commands** without locks using `Rc<RefCell<>>` for internal state
+3. **Replies** via a `oneshot` channel back to the caller
+4. **Owns its data** completely, with no shared memory between shards
+
+This architecture provides:
+
+- **Lock-free execution** on the data path
+- **Linear scalability** with CPU core count
+- **Predictable performance** without lock contention
+
+### Key Distribution
+
+Keys are distributed to shards using a hash function. The hash is computed once when a command is dispatched, and the command is sent to the appropriate shard worker. This ensures:
+
+- **Deterministic routing:** The same key always goes to the same shard
+- **Even distribution:** Keys are spread uniformly across shards
+- **Local processing:** Each shard handles its partition independently
+
+### Memory Partitioning
+
+Each shard maintains its own:
+
+- Hash tables for key-value storage
+- Lists, hashes, and sets
+- Vector indexes (HNSW)
+- TTL expiration tracking
+- Statistics and metrics
+
+Total memory usage scales linearly with shard count, as each shard allocates its own data structures.
+
+## Performance Tuning
+
+### Benchmark Your Workload
+
+The optimal shard count depends on your specific workload:
+
+```rust
+use kora_embedded::{Config, Database};
+use std::time::Instant;
+
+fn benchmark_config(shard_count: usize) {
+    let db = Database::open(Config { shard_count });
+    let start = Instant::now();
+    
+    for i in 0..100_000 {
+        let key = format!("key:{}", i);
+        db.set(&key, b"value");
+    }
+    
+    let elapsed = start.elapsed();
+    println!("Shards: {}, Time: {:?}", shard_count, elapsed);
+}
+
+fn main() {
+    for shards in [2, 4, 8, 16, 32] {
+        benchmark_config(shards);
+    }
+}
+```
+
+### Monitoring Shard Utilization
+
+You can access the underlying shard engine to monitor per-shard statistics:
+
+```rust
+use kora_embedded::{Config, Database};
+
+let db = Database::open(Config::default());
+let engine = db.engine();
+
+// Number of shards in use
+let shard_count = engine.shard_count();
+println!("Active shards: {}", shard_count);
+```
+
+## Common Patterns
+
+### Application Server
+
+```rust
+use kora_embedded::{Config, Database};
+use std::sync::Arc;
+
+// Initialize once at startup
+let db = Arc::new(Database::open(Config::default()));
+
+// Share across request handlers
+let db_clone = db.clone();
+tokio::spawn(async move {
+    // Handle requests using db_clone
+});
+```
+
+### Background Worker
+
+```rust
+use kora_embedded::{Config, Database};
+use std::sync::Arc;
+use std::thread;
+
+let db = Arc::new(Database::open(Config { shard_count: 4 }));
+let db_worker = db.clone();
+
+thread::spawn(move || {
+    loop {
+        // Process background tasks
+        db_worker.set("last_run", b"timestamp");
+        thread::sleep(std::time::Duration::from_secs(60));
+    }
+});
+```
+
+### Testing with Cleanup
+
+```rust
+use kora_embedded::{Config, Database};
+
+fn with_clean_db<F>(test: F)
+where
+    F: FnOnce(&Database),
+{
+    let db = Database::open(Config { shard_count: 2 });
+    test(&db);
+    db.flush_db(); // Clean up after test
+}
+
+#[test]
+fn test_example() {
+    with_clean_db(|db| {
+        db.set("key", b"value");
+        assert_eq!(db.get("key"), Some(b"value".to_vec()));
+    });
+}
+```

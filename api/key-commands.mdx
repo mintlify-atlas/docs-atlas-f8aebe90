@@ -1,0 +1,745 @@
+---
+title: Key Commands
+description: Commands for managing keys and their metadata in Kora
+---
+
+Key commands allow you to manage keys across all data types, handle expiration, and perform key-level operations.
+
+## DEL
+
+Delete one or more keys.
+
+**Syntax**
+```
+DEL key [key ...]
+```
+
+<ParamField path="key" type="string" required>
+  One or more keys to delete
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of keys that were removed
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET key1 "Hello"
+OK
+redis-cli> SET key2 "World"
+OK
+redis-cli> DEL key1 key2 key3
+(integer) 2
+```
+
+**Time complexity:** O(N) where N is the number of keys to remove
+
+---
+
+## EXISTS
+
+Check if one or more keys exist.
+
+**Syntax**
+```
+EXISTS key [key ...]
+```
+
+<ParamField path="key" type="string" required>
+  One or more keys to check
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of keys that exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET key1 "Hello"
+OK
+redis-cli> EXISTS key1
+(integer) 1
+redis-cli> EXISTS key1 key2
+(integer) 1
+redis-cli> EXISTS nosuchkey
+(integer) 0
+```
+
+**Time complexity:** O(N) where N is the number of keys to check
+
+---
+
+## EXPIRE
+
+Set a key's time to live in seconds.
+
+**Syntax**
+```
+EXPIRE key seconds
+```
+
+<ParamField path="key" type="string" required>
+  The key to set expiration on
+</ParamField>
+
+<ParamField path="seconds" type="integer" required>
+  The time to live in seconds
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the timeout was set, 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> EXPIRE mykey 10
+(integer) 1
+redis-cli> TTL mykey
+(integer) 10
+```
+
+**Time complexity:** O(1)
+
+---
+
+## PEXPIRE
+
+Set a key's time to live in milliseconds.
+
+**Syntax**
+```
+PEXPIRE key milliseconds
+```
+
+<ParamField path="key" type="string" required>
+  The key to set expiration on
+</ParamField>
+
+<ParamField path="milliseconds" type="integer" required>
+  The time to live in milliseconds
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the timeout was set, 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> PEXPIRE mykey 1500
+(integer) 1
+redis-cli> PTTL mykey
+(integer) 1499
+```
+
+**Time complexity:** O(1)
+
+---
+
+## EXPIREAT
+
+Set the expiration for a key as a Unix timestamp (seconds).
+
+**Syntax**
+```
+EXPIREAT key timestamp
+```
+
+<ParamField path="key" type="string" required>
+  The key to set expiration on
+</ParamField>
+
+<ParamField path="timestamp" type="integer" required>
+  Unix timestamp in seconds
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the timeout was set, 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> EXPIREAT mykey 1735689600
+(integer) 1
+```
+
+**Time complexity:** O(1)
+
+---
+
+## PEXPIREAT
+
+Set the expiration for a key as a Unix timestamp (milliseconds).
+
+**Syntax**
+```
+PEXPIREAT key timestamp_ms
+```
+
+<ParamField path="key" type="string" required>
+  The key to set expiration on
+</ParamField>
+
+<ParamField path="timestamp_ms" type="integer" required>
+  Unix timestamp in milliseconds
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the timeout was set, 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> PEXPIREAT mykey 1735689600000
+(integer) 1
+```
+
+**Time complexity:** O(1)
+
+---
+
+## PERSIST
+
+Remove the expiration from a key.
+
+**Syntax**
+```
+PERSIST key
+```
+
+<ParamField path="key" type="string" required>
+  The key to persist
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the timeout was removed, 0 if the key does not exist or does not have an expiration
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> EXPIRE mykey 10
+(integer) 1
+redis-cli> TTL mykey
+(integer) 10
+redis-cli> PERSIST mykey
+(integer) 1
+redis-cli> TTL mykey
+(integer) -1
+```
+
+**Time complexity:** O(1)
+
+---
+
+## TTL
+
+Get the time to live for a key in seconds.
+
+**Syntax**
+```
+TTL key
+```
+
+<ParamField path="key" type="string" required>
+  The key to check
+</ParamField>
+
+**Return value**
+
+<ResponseField name="ttl" type="integer">
+  TTL in seconds, -1 if the key exists but has no expiration, -2 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> EXPIRE mykey 10
+(integer) 1
+redis-cli> TTL mykey
+(integer) 10
+```
+
+**Time complexity:** O(1)
+
+---
+
+## PTTL
+
+Get the time to live for a key in milliseconds.
+
+**Syntax**
+```
+PTTL key
+```
+
+<ParamField path="key" type="string" required>
+  The key to check
+</ParamField>
+
+**Return value**
+
+<ResponseField name="ttl" type="integer">
+  TTL in milliseconds, -1 if the key exists but has no expiration, -2 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> PEXPIRE mykey 1500
+(integer) 1
+redis-cli> PTTL mykey
+(integer) 1499
+```
+
+**Time complexity:** O(1)
+
+---
+
+## TYPE
+
+Determine the type stored at a key.
+
+**Syntax**
+```
+TYPE key
+```
+
+<ParamField path="key" type="string" required>
+  The key to inspect
+</ParamField>
+
+**Return value**
+
+<ResponseField name="type" type="string">
+  Type of the key: string, list, set, hash, zset, or none if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET key1 "value"
+OK
+redis-cli> LPUSH key2 "a"
+(integer) 1
+redis-cli> SADD key3 "a"
+(integer) 1
+redis-cli> TYPE key1
+string
+redis-cli> TYPE key2
+list
+redis-cli> TYPE key3
+set
+```
+
+**Time complexity:** O(1)
+
+---
+
+## KEYS
+
+Find all keys matching a glob pattern.
+
+**Syntax**
+```
+KEYS pattern
+```
+
+<ParamField path="pattern" type="string" required>
+  Glob-style pattern (* matches any, ? matches one character, [...] matches character set)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="keys" type="array">
+  List of keys matching the pattern
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> MSET firstname Jack lastname Stuntman age 35
+OK
+redis-cli> KEYS *name*
+1) "firstname"
+2) "lastname"
+redis-cli> KEYS a??
+1) "age"
+redis-cli> KEYS *
+1) "firstname"
+2) "lastname"
+3) "age"
+```
+
+**Time complexity:** O(N) where N is the number of keys in the database
+
+**Warning:** Use KEYS only in development. For production, use SCAN.
+
+---
+
+## SCAN
+
+Incrementally iterate over keys.
+
+**Syntax**
+```
+SCAN cursor [MATCH pattern] [COUNT count]
+```
+
+<ParamField path="cursor" type="integer" required>
+  The cursor position (use 0 to start a new iteration)
+</ParamField>
+
+<ParamField path="MATCH" type="string">
+  Glob pattern to filter keys
+</ParamField>
+
+<ParamField path="COUNT" type="integer">
+  Hint for how many keys to return per iteration (default: 10)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="array">
+  Array with two elements: [0] next cursor (0 when iteration is complete), [1] array of keys
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SCAN 0
+1) "17"
+2)  1) "key:12"
+    2) "key:8"
+    3) "key:4"
+redis-cli> SCAN 17
+1) "0"
+2)  1) "key:14"
+    2) "key:16"
+redis-cli> SCAN 0 MATCH key:1* COUNT 100
+1) "0"
+2)  1) "key:12"
+    2) "key:14"
+    3) "key:16"
+```
+
+**Time complexity:** O(1) for every call, O(N) for a complete iteration
+
+---
+
+## DBSIZE
+
+Return the number of keys in the current database.
+
+**Syntax**
+```
+DBSIZE
+```
+
+**Return value**
+
+<ResponseField name="size" type="integer">
+  The number of keys
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> MSET key1 "a" key2 "b" key3 "c"
+OK
+redis-cli> DBSIZE
+(integer) 3
+```
+
+**Time complexity:** O(1)
+
+---
+
+## FLUSHDB
+
+Delete all keys in the current database.
+
+**Syntax**
+```
+FLUSHDB
+```
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  Always returns OK
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET key1 "Hello"
+OK
+redis-cli> SET key2 "World"
+OK
+redis-cli> FLUSHDB
+OK
+redis-cli> DBSIZE
+(integer) 0
+```
+
+**Time complexity:** O(N) where N is the number of keys in the database
+
+---
+
+## RENAME
+
+Rename a key.
+
+**Syntax**
+```
+RENAME key newkey
+```
+
+<ParamField path="key" type="string" required>
+  The key to rename
+</ParamField>
+
+<ParamField path="newkey" type="string" required>
+  The new name for the key
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK on success, error if the source key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> RENAME mykey mynewkey
+OK
+redis-cli> GET mynewkey
+"Hello"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## RENAMENX
+
+Rename a key only if the new key does not exist.
+
+**Syntax**
+```
+RENAMENX key newkey
+```
+
+<ParamField path="key" type="string" required>
+  The key to rename
+</ParamField>
+
+<ParamField path="newkey" type="string" required>
+  The new name for the key
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the key was renamed, 0 if the new key already exists
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> SET myotherkey "World"
+OK
+redis-cli> RENAMENX mykey myotherkey
+(integer) 0
+redis-cli> RENAMENX mykey mynewkey
+(integer) 1
+```
+
+**Time complexity:** O(1)
+
+---
+
+## UNLINK
+
+Delete one or more keys asynchronously.
+
+**Syntax**
+```
+UNLINK key [key ...]
+```
+
+<ParamField path="key" type="string" required>
+  One or more keys to delete
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of keys that were unlinked
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET key1 "Hello"
+OK
+redis-cli> SET key2 "World"
+OK
+redis-cli> UNLINK key1 key2 key3
+(integer) 2
+```
+
+**Time complexity:** O(1) for each key, O(N) overall where N is the number of keys
+
+**Note:** UNLINK is similar to DEL but performs the actual memory reclamation asynchronously.
+
+---
+
+## COPY
+
+Copy a key to another key.
+
+**Syntax**
+```
+COPY source destination [REPLACE]
+```
+
+<ParamField path="source" type="string" required>
+  The source key
+</ParamField>
+
+<ParamField path="destination" type="string" required>
+  The destination key
+</ParamField>
+
+<ParamField path="REPLACE" type="flag">
+  Overwrite the destination key if it exists
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the key was copied, 0 otherwise
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> COPY mykey mynewkey
+(integer) 1
+redis-cli> GET mynewkey
+"Hello"
+```
+
+**Time complexity:** O(N) where N is the size of the value
+
+---
+
+## RANDOMKEY
+
+Return a random key from the keyspace.
+
+**Syntax**
+```
+RANDOMKEY
+```
+
+**Return value**
+
+<ResponseField name="key" type="string | null">
+  A random key, or null if the database is empty
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> MSET key1 "a" key2 "b" key3 "c"
+OK
+redis-cli> RANDOMKEY
+"key2"
+redis-cli> RANDOMKEY
+"key1"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## TOUCH
+
+Alter the last access time of one or more keys.
+
+**Syntax**
+```
+TOUCH key [key ...]
+```
+
+<ParamField path="key" type="string" required>
+  One or more keys to touch
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of keys that were touched
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET key1 "Hello"
+OK
+redis-cli> SET key2 "World"
+OK
+redis-cli> TOUCH key1 key2
+(integer) 2
+```
+
+**Time complexity:** O(N) where N is the number of keys
+
+---
+
+## Redis Compatibility
+
+Kora implements all standard Redis key management commands with identical semantics.

@@ -1,0 +1,413 @@
+---
+title: Pub/Sub Commands
+description: Publish/Subscribe messaging commands in Kora
+---
+
+Kora provides a high-performance publish/subscribe message broker with channel and pattern-based subscriptions. Messages are delivered in real-time to all active subscribers.
+
+## SUBSCRIBE
+
+Subscribe to one or more channels.
+
+**Syntax**
+```
+SUBSCRIBE channel [channel ...]
+```
+
+<ParamField path="channel" type="string" required>
+  One or more channel names to subscribe to
+</ParamField>
+
+**Return value**
+
+<ResponseField name="subscription" type="array">
+  Array of subscription confirmations, one per channel
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SUBSCRIBE news weather
+1) "subscribe"
+2) "news"
+3) (integer) 1
+1) "subscribe"
+2) "weather"
+3) (integer) 2
+```
+
+**Time complexity:** O(N) where N is the number of channels
+
+**Notes:**
+- Enters pub/sub mode (client can only use pub/sub commands)
+- Receives messages as arrays: ["message", channel, payload]
+- Subscription count increases with each channel
+
+---
+
+## UNSUBSCRIBE
+
+Unsubscribe from one or more channels.
+
+**Syntax**
+```
+UNSUBSCRIBE [channel ...]
+```
+
+<ParamField path="channel" type="string">
+  One or more channel names to unsubscribe from (empty = all)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="unsubscription" type="array">
+  Array of unsubscription confirmations
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> UNSUBSCRIBE news
+1) "unsubscribe"
+2) "news"
+3) (integer) 1
+
+redis-cli> UNSUBSCRIBE
+1) "unsubscribe"
+2) "weather"
+3) (integer) 0
+```
+
+**Time complexity:** O(N) where N is the number of channels
+
+**Notes:**
+- Without arguments, unsubscribes from all channels
+- Client exits pub/sub mode when subscription count reaches 0
+
+---
+
+## PSUBSCRIBE
+
+Subscribe to one or more channel patterns.
+
+**Syntax**
+```
+PSUBSCRIBE pattern [pattern ...]
+```
+
+<ParamField path="pattern" type="string" required>
+  One or more glob patterns (* matches any, ? matches one character)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="subscription" type="array">
+  Array of pattern subscription confirmations
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> PSUBSCRIBE news.* sports.*
+1) "psubscribe"
+2) "news.*"
+3) (integer) 1
+1) "psubscribe"
+2) "sports.*"
+3) (integer) 2
+```
+
+**Time complexity:** O(N) where N is the number of patterns
+
+**Notes:**
+- Pattern messages include the pattern that matched: ["pmessage", pattern, channel, payload]
+- A message can match multiple patterns (delivered once per pattern)
+- Glob syntax: `*` = any characters, `?` = single character, `[abc]` = character set
+
+---
+
+## PUNSUBSCRIBE
+
+Unsubscribe from one or more channel patterns.
+
+**Syntax**
+```
+PUNSUBSCRIBE [pattern ...]
+```
+
+<ParamField path="pattern" type="string">
+  One or more patterns to unsubscribe from (empty = all)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="unsubscription" type="array">
+  Array of pattern unsubscription confirmations
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> PUNSUBSCRIBE news.*
+1) "punsubscribe"
+2) "news.*"
+3) (integer) 1
+
+redis-cli> PUNSUBSCRIBE
+1) "punsubscribe"
+2) "sports.*"
+3) (integer) 0
+```
+
+**Time complexity:** O(N) where N is the number of patterns
+
+---
+
+## PUBLISH
+
+Publish a message to a channel.
+
+**Syntax**
+```
+PUBLISH channel message
+```
+
+<ParamField path="channel" type="string" required>
+  The channel name
+</ParamField>
+
+<ParamField path="message" type="string" required>
+  The message payload
+</ParamField>
+
+**Return value**
+
+<ResponseField name="subscribers" type="integer">
+  The number of subscribers that received the message
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> PUBLISH news.tech "AI breakthrough announced"
+(integer) 3
+redis-cli> PUBLISH private.logs "Error: connection timeout"
+(integer) 0
+```
+
+**Time complexity:** O(N+M) where N is the number of subscribers to the channel and M is the total number of subscribed patterns
+
+**Notes:**
+- Returns immediately after delivering to all subscribers
+- Does not wait for subscribers to process the message
+- Fire-and-forget semantics (no persistence or delivery guarantees)
+
+---
+
+## Message Format
+
+### Channel Messages
+
+When a channel subscriber receives a message:
+
+```
+1) "message"
+2) "news.tech"
+3) "AI breakthrough announced"
+```
+
+Format: `["message", channel, payload]`
+
+### Pattern Messages
+
+When a pattern subscriber receives a message:
+
+```
+1) "pmessage"
+2) "news.*"
+3) "news.tech"
+4) "AI breakthrough announced"
+```
+
+Format: `["pmessage", pattern, channel, payload]`
+
+### Subscription Confirmations
+
+When subscribing:
+
+```
+1) "subscribe"
+2) "news.tech"
+3) (integer) 1
+```
+
+Format: `["subscribe", channel, subscription_count]`
+
+When pattern subscribing:
+
+```
+1) "psubscribe"
+2) "news.*"
+3) (integer) 1
+```
+
+Format: `["psubscribe", pattern, subscription_count]`
+
+---
+
+## Pub/Sub Mode
+
+### Entering Pub/Sub Mode
+
+Clients enter pub/sub mode when they issue SUBSCRIBE or PSUBSCRIBE:
+
+- Cannot execute regular commands (GET, SET, etc.)
+- Can only use: SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, PING, QUIT
+- Connection becomes push-based (receives messages asynchronously)
+
+### Exiting Pub/Sub Mode
+
+Client exits pub/sub mode when all subscriptions are removed:
+
+- Call UNSUBSCRIBE without arguments to unsubscribe from all channels
+- Call PUNSUBSCRIBE without arguments to unsubscribe from all patterns
+- When subscription count reaches 0, client can execute regular commands again
+
+---
+
+## Performance Characteristics
+
+### Throughput
+
+- **Single publisher:** 1M+ messages/sec per shard
+- **Multiple publishers:** Linear scaling with shards
+- **Fan-out:** Minimal overhead per subscriber
+
+### Latency
+
+- **Intra-shard:** Less than 100µs publish-to-delivery
+- **Cross-shard patterns:** Less than 500µs (replicated to all shards)
+- **Network RTT:** Adds ~1ms for remote clients
+
+### Scalability
+
+- **Channels:** Unlimited (hash-partitioned across shards)
+- **Subscribers per channel:** Thousands with minimal overhead
+- **Pattern subscriptions:** Replicated to all shards (use sparingly)
+
+---
+
+## Use Cases
+
+### Real-Time Notifications
+
+```bash
+# Publisher: send user notifications
+redis-cli> PUBLISH user:123:notifications "New message from Alice"
+
+# Subscriber: receive notifications
+redis-cli> SUBSCRIBE user:123:notifications
+1) "message"
+2) "user:123:notifications"
+3) "New message from Alice"
+```
+
+### Event Broadcasting
+
+```bash
+# Publisher: broadcast system events
+redis-cli> PUBLISH events.system "Server restarting in 5 minutes"
+
+# Subscribers: listen for all events
+redis-cli> PSUBSCRIBE events.*
+1) "pmessage"
+2) "events.*"
+3) "events.system"
+4) "Server restarting in 5 minutes"
+```
+
+### Chat Application
+
+```bash
+# Publisher: send chat message
+redis-cli> PUBLISH room:general:chat "Alice: Hello everyone!"
+
+# Subscribers: listen to chat room
+redis-cli> SUBSCRIBE room:general:chat
+1) "message"
+2) "room:general:chat"
+3) "Alice: Hello everyone!"
+```
+
+### Cache Invalidation
+
+```bash
+# Publisher: notify cache invalidation
+redis-cli> PUBLISH cache.invalidate "users:123"
+
+# Subscribers: listen for invalidation events
+redis-cli> SUBSCRIBE cache.invalidate
+1) "message"
+2) "cache.invalidate"
+3) "users:123"
+```
+
+---
+
+## Sharding Behavior
+
+### Channel Subscriptions
+
+- Channels are hash-partitioned across shards
+- Each channel is handled by exactly one shard
+- Subscribers connect to the shard that owns their channel
+- PUBLISH routes to the correct shard automatically
+
+### Pattern Subscriptions
+
+- Patterns are replicated to all shards
+- Pattern subscribers receive messages from all shards
+- Higher memory overhead for pattern subscriptions
+- Use specific channels when possible for better performance
+
+---
+
+## Reliability Guarantees
+
+### Message Delivery
+
+- **At-most-once:** Messages not persisted, lost if no subscribers
+- **Best-effort:** Delivered to all active subscribers at publish time
+- **No replay:** Subscribers only receive messages sent after subscription
+
+### Ordering
+
+- **Per-channel:** Messages delivered in publish order
+- **Cross-channel:** No ordering guarantees
+- **Pattern subscriptions:** Order preserved within each matching channel
+
+### Failure Handling
+
+- **Publisher failure:** Messages lost, no retry
+- **Subscriber disconnect:** Misses messages while disconnected
+- **Server restart:** All subscriptions and in-flight messages lost
+
+**For durable messaging, use CDC or an external message queue.**
+
+---
+
+## Comparison with Redis
+
+Kora pub/sub is fully compatible with Redis PUBLISH/SUBSCRIBE semantics:
+
+- Identical command syntax and behavior
+- Same message format
+- Compatible wire protocol (RESP2)
+- Drop-in replacement for Redis pub/sub clients
+
+**Key differences:**
+
+- Sharded pub/sub (better multi-threaded performance)
+- Lower latency for intra-shard messages
+- Pattern subscriptions have higher overhead (replicated to all shards)
+- No PUBSUB command (introspection) yet

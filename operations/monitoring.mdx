@@ -1,0 +1,317 @@
+---
+title: Monitoring
+description: Built-in observability features for production monitoring
+---
+
+Kora includes production-grade observability with near-zero overhead: per-command statistics, hot-key detection, latency histograms, and Prometheus-compatible metrics.
+
+## Metrics Endpoint
+
+Enable the Prometheus metrics HTTP endpoint:
+
+```bash
+kora-cli --metrics-port 9090
+```
+
+Or in `kora.toml`:
+
+```toml
+metrics_port = 9090
+```
+
+The `/metrics` endpoint exposes Prometheus text exposition format:
+
+```bash
+curl http://localhost:9090/metrics
+```
+
+### Exported Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `kora_commands_total` | counter | Commands processed, labeled by `cmd` type |
+| `kora_keys_total` | gauge | Current key count across all shards |
+| `kora_memory_used_bytes` | gauge | Approximate memory consumption |
+| `kora_bytes_in_total` | counter | Total bytes received from clients |
+| `kora_bytes_out_total` | counter | Total bytes sent to clients |
+| `kora_command_duration_seconds` | histogram | Command latency distribution by type |
+
+### Example Output
+
+```prometheus
+# HELP kora_commands_total Total commands processed by type.
+# TYPE kora_commands_total counter
+kora_commands_total{cmd="get"} 245832
+kora_commands_total{cmd="set"} 123456
+kora_commands_total{cmd="hget"} 45678
+
+# HELP kora_keys_total Total number of keys.
+# TYPE kora_keys_total gauge
+kora_keys_total 98765
+
+# HELP kora_memory_used_bytes Memory used in bytes.
+# TYPE kora_memory_used_bytes gauge
+kora_memory_used_bytes 134217728
+
+# HELP kora_command_duration_seconds Command latency distribution.
+# TYPE kora_command_duration_seconds histogram
+kora_command_duration_seconds_bucket{cmd="get",le="0.0001"} 123456
+kora_command_duration_seconds_bucket{cmd="get",le="0.001"} 234567
+kora_command_duration_seconds_bucket{cmd="get",le="0.01"} 245000
+kora_command_duration_seconds_bucket{cmd="get",le="+Inf"} 245832
+kora_command_duration_seconds_sum{cmd="get"} 12.345678
+kora_command_duration_seconds_count{cmd="get"} 245832
+```
+
+## Per-Command Statistics
+
+Kora tracks detailed statistics for each command type:
+
+- **Command counts** — total executions per command
+- **Total duration** — cumulative execution time in nanoseconds
+- **Average latency** — computed from count and total duration
+
+Statistics are collected using lock-free atomic counters with `Relaxed` ordering for minimal overhead on the data path.
+
+### Command Types Tracked
+
+Kora tracks 32 command slots, including:
+
+```
+get, set, del, incr, decr, mget, mset, exists, expire, ttl,
+lpush, rpush, lpop, rpop, hset, hget, hgetall, sadd, srem,
+ping, info, dbsize, flush, scan, vecset, vecquery, ...
+```
+
+See `kora-observability/src/prometheus.rs:24-28` for the full list.
+
+## Hot-Key Detection
+
+Kora uses a **Count-Min Sketch** probabilistic data structure to identify frequently accessed keys with minimal memory overhead.
+
+### How It Works
+
+- **Memory footprint:** ~2KB per shard (64 columns × 4 rows × 8 bytes)
+- **Accuracy:** Guaranteed never to undercount (may overestimate due to hash collisions)
+- **Decay:** Periodic decay (divide by 2) implements sliding window over recent access patterns
+
+### Implementation Details
+
+<CodeGroup>
+```rust Per-Shard Sketch
+pub struct ShardStats {
+    hot_key_sketch: parking_lot::Mutex<CountMinSketch>,
+    // ...
+}
+
+impl ShardStats {
+    pub fn record_key_access(&self, key: &[u8]) {
+        self.hot_key_sketch.lock().increment(key);
+    }
+
+    pub fn estimate_key_frequency(&self, key: &[u8]) -> u64 {
+        self.hot_key_sketch.lock().estimate(key)
+    }
+}
+```
+
+```rust Configuration
+// Default sketch for hot-key detection
+CountMinSketch::new(64, 4)  // width=64, depth=4, ~2KB
+```
+</CodeGroup>
+
+### Querying Hot Keys
+
+Kora currently exposes hot-key frequency estimation through the internal API (not via RESP2 yet):
+
+```rust
+let freq = shard_stats.estimate_key_frequency(b"user:12345");
+if freq > threshold {
+    // Key is accessed frequently
+}
+```
+
+**Future:** A `HOTKEYS` command may be added to expose top-K keys via the Redis protocol.
+
+### Decay Strategy
+
+Call `decay_hot_keys()` periodically to prevent stale keys from dominating frequency rankings:
+
+```rust
+shard_stats.decay_hot_keys();  // Divides all counters by 2
+```
+
+**Recommendation:** Decay every 60 seconds to implement a sliding ~2-minute window.
+
+## Latency Histograms
+
+Kora uses **HDR histograms** (High Dynamic Range) for accurate per-command latency distributions.
+
+### Features
+
+- **Percentile queries:** p50, p90, p99, p99.9
+- **Concurrent recording:** Lock-free writes from connection handlers
+- **Low memory overhead:** Logarithmic buckets, not linear bins
+
+### Histogram Recording
+
+Latency is recorded automatically using RAII-based `CommandTimer`:
+
+```rust
+pub struct CommandTimer<'a> {
+    stats: &'a ShardStats,
+    cmd_type: usize,
+    start: Instant,
+}
+
+impl Drop for CommandTimer<'_> {
+    fn drop(&mut self) {
+        let duration = self.start.elapsed().as_nanos() as u64;
+        self.stats.record_command(self.cmd_type, duration);
+    }
+}
+```
+
+Usage in command handlers:
+
+```rust
+let _timer = CommandTimer::start(&shard_stats, CMD_GET);
+// Execute command...
+// Timer records duration on drop
+```
+
+### Accessing Histogram Data
+
+Histograms are exported via Prometheus metrics:
+
+```prometheus
+kora_command_duration_seconds_bucket{cmd="get",le="0.0001"} 123456
+kora_command_duration_seconds_bucket{cmd="get",le="0.001"} 234567
+```
+
+These buckets represent:
+
+- `le="0.0001"` → p50 (50th percentile)
+- `le="0.001"` → p90 (90th percentile)
+- `le="0.01"` → p99 (99th percentile)
+- `le="0.1"` → p99.9 (99.9th percentile)
+
+## Shard Statistics
+
+Each shard maintains independent statistics, which are merged on-demand for server-wide aggregates.
+
+### Per-Shard Metrics
+
+```rust
+pub struct ShardStats {
+    total_commands: AtomicU64,
+    cmd_counts: [AtomicU64; 32],
+    cmd_durations_ns: [AtomicU64; 32],
+    key_count: AtomicU64,
+    memory_used: AtomicU64,
+    bytes_in: AtomicU64,
+    bytes_out: AtomicU64,
+    hot_key_sketch: Mutex<CountMinSketch>,
+    histograms: CommandHistograms,
+}
+```
+
+All atomic counters use `Ordering::Relaxed` for maximum performance.
+
+### Snapshot and Merge
+
+Create point-in-time snapshots across all shards and merge:
+
+```rust
+// Capture snapshots from all shards
+let snapshots: Vec<StatsSnapshot> = shards
+    .iter()
+    .map(|s| s.stats.snapshot())
+    .collect();
+
+// Merge into server-wide aggregate
+let merged = StatsSnapshot::merge(&snapshots);
+
+println!("Total commands: {}", merged.total_commands);
+println!("Total keys: {}", merged.key_count);
+println!("Memory used: {} bytes", merged.memory_used);
+```
+
+## Memory Tracking
+
+Kora tracks approximate memory usage per shard:
+
+```rust
+shard_stats.set_memory_used(estimated_bytes);
+```
+
+Memory estimation includes:
+
+- Key storage (keys + value pointers)
+- Value storage (strings, lists, hashes, sets)
+- Metadata overhead (expiration timers, reference counts)
+
+**Note:** Memory tracking is approximate and does not include allocator overhead or system memory fragmentation.
+
+## Byte Throughput
+
+Network byte counters track data transfer:
+
+```rust
+shard_stats.record_bytes(bytes_in, bytes_out);
+```
+
+- `bytes_in` — bytes received from clients (RESP2 commands)
+- `bytes_out` — bytes sent to clients (RESP2 responses)
+
+These are cumulative counters exported as `kora_bytes_in_total` and `kora_bytes_out_total`.
+
+## Prometheus Integration
+
+Configure Prometheus to scrape the Kora metrics endpoint:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'kora'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 15s
+```
+
+Example PromQL queries:
+
+```promql
+# Request rate (ops/sec)
+rate(kora_commands_total[1m])
+
+# p99 latency by command
+histogram_quantile(0.99, rate(kora_command_duration_seconds_bucket[5m]))
+
+# Memory growth
+deriv(kora_memory_used_bytes[5m])
+
+# Throughput (MB/sec)
+rate(kora_bytes_out_total[1m]) / 1024 / 1024
+```
+
+## Grafana Dashboards
+
+Create Grafana dashboards using the exported metrics:
+
+- **Operations panel:** `rate(kora_commands_total[1m])` grouped by `cmd`
+- **Latency heatmap:** `kora_command_duration_seconds_bucket` histogram
+- **Memory gauge:** `kora_memory_used_bytes / 1024 / 1024` (MB)
+- **Throughput graph:** `rate(kora_bytes_in_total[1m])` + `rate(kora_bytes_out_total[1m])`
+
+## Performance Impact
+
+Kora's observability subsystem is designed for always-on production use:
+
+- **Atomic counters:** `Relaxed` ordering, no memory barriers on common path
+- **RAII timers:** Zero-cost abstraction, compiler-optimized
+- **Count-Min Sketch:** 2KB memory, simple hash + increment per key access
+- **HDR histograms:** Logarithmic memory, lock-free recording
+
+Typical overhead: **< 1%** throughput impact with metrics enabled.

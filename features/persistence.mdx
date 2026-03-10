@@ -1,0 +1,564 @@
+---
+title: Persistence
+description: Durable storage with Write-Ahead Log, RDB snapshots, and LZ4 compression
+---
+
+Kora provides a comprehensive persistence layer that combines write-ahead logging for crash recovery, point-in-time snapshots for fast restarts, and tiered storage with LZ4 compression for cold data.
+
+## Overview
+
+From `kora-storage/src/lib.rs:1-43`:
+
+> Tiered persistence engine for Kōra. This crate provides the durable storage stack that sits beneath Kōra's in-memory shard engine. It implements a two-tier hierarchy — hot RAM and cold LZ4-compressed disk — with write-ahead logging and point-in-time snapshots for crash recovery.
+
+### Architecture Layers
+
+<CardGroup cols={3}>
+  <Card title="WAL" icon="scroll">
+    **Write-Ahead Log**
+    
+    Append-only log with CRC-32C integrity. Every mutation logged before acknowledgement.
+  </Card>
+  
+  <Card title="RDB" icon="camera">
+    **Snapshots**
+    
+    Compact binary format for complete database images. Atomic writes with CRC verification.
+  </Card>
+  
+  <Card title="Cold Tier" icon="snowflake">
+    **LZ4 Backend**
+    
+    Compressed storage for evicted data with in-memory hash index.
+  </Card>
+</CardGroup>
+
+## Write-Ahead Log (WAL)
+
+### WAL Architecture
+
+From `kora-storage/src/wal.rs:1-17`:
+
+```text
+Wire format (per entry):
+[len: u32][type: u8][payload...][crc32: u32]
+
+- len: total byte length of type + payload (excludes len and crc fields)
+- type: discriminant of WalEntry
+- payload: entry-specific data
+- crc32: CRC-32C of type + payload
+```
+
+### Supported Operations
+
+From `kora-storage/src/wal.rs:36-89`:
+
+```rust
+pub enum WalEntry {
+    Set { key, value, ttl_ms },
+    Del { key },
+    Expire { key, ttl_ms },
+    LPush { key, values },
+    RPush { key, values },
+    HSet { key, fields },
+    SAdd { key, members },
+    FlushDb,
+}
+```
+
+### Sync Policies
+
+From `kora-storage/src/wal.rs:24-33`:
+
+<Tabs>
+  <Tab title="EveryWrite">
+    ```rust
+    SyncPolicy::EveryWrite
+    ```
+    
+    **Fsync after every write**
+    
+    - **Durability**: Maximum (no data loss)
+    - **Performance**: Slowest (~1000 writes/sec on SSD)
+    - **Use case**: Financial transactions, critical data
+  </Tab>
+  
+  <Tab title="EverySecond">
+    ```rust
+    SyncPolicy::EverySecond
+    ```
+    
+    **Fsync once per second**
+    
+    - **Durability**: Good (≤1 second data loss)
+    - **Performance**: Balanced (~50K writes/sec)
+    - **Use case**: General-purpose caching (default)
+  </Tab>
+  
+  <Tab title="OsManaged">
+    ```rust
+    SyncPolicy::OsManaged
+    ```
+    
+    **Let OS decide when to flush**
+    
+    - **Durability**: Lowest (seconds to minutes data loss)
+    - **Performance**: Fastest (~100K+ writes/sec)
+    - **Use case**: Ephemeral data, can tolerate loss
+  </Tab>
+</Tabs>
+
+### WAL Operations
+
+```rust
+// Open or create WAL
+let mut wal = WriteAheadLog::open("kora.wal", SyncPolicy::EverySecond)?;
+
+// Append entries
+wal.append(&WalEntry::Set {
+    key: b"user:1000".to_vec(),
+    value: b"Alice".to_vec(),
+    ttl_ms: None,
+})?;
+
+// Manual sync (for EverySecond/OsManaged)
+wal.sync()?;
+
+// Replay on restart
+WriteAheadLog::replay("kora.wal", |entry| {
+    match entry {
+        WalEntry::Set { key, value, ttl_ms } => {
+            // Restore key-value
+        }
+        WalEntry::Del { key } => {
+            // Remove key
+        }
+        // ...
+    }
+})?;
+```
+
+### WAL Rotation
+
+WAL files are rotated when they exceed a size threshold or after snapshots:
+
+```rust
+// Check WAL size
+if wal.bytes_written() > max_wal_size {
+    // Trigger snapshot
+    create_snapshot()?;
+    
+    // Truncate WAL
+    wal = WriteAheadLog::open("kora.wal", policy)?;
+}
+```
+
+<Note>
+  After a successful RDB snapshot, the WAL can be truncated since the snapshot contains all data up to that point.
+</Note>
+
+## RDB Snapshots
+
+### RDB Format
+
+From `kora-storage/src/rdb.rs:7-19`:
+
+```text
+File format:
+[magic: 8 bytes "KORA_RDB"][version: u32][num_entries: u64]
+[entry]*
+[checksum: u32 CRC-32C of everything before this]
+
+Each entry:
+[key_len: u32][key_bytes][ttl_flag: u8][ttl_ms: u64 if flag=1]
+[value_type: u8][value_data...]
+```
+
+### Supported Types
+
+From `kora-storage/src/rdb.rs:51-64`:
+
+```rust
+pub enum RdbValue {
+    String(Vec<u8>),              // Byte string
+    Int(i64),                     // Integer
+    List(Vec<Vec<u8>>),           // List of byte strings
+    Set(Vec<Vec<u8>>),            // Set of byte strings
+    Hash(Vec<(Vec<u8>, Vec<u8>)>), // Hash field→value pairs
+}
+```
+
+### Creating Snapshots
+
+```rust
+use kora_storage::rdb::{save, load, RdbEntry, RdbValue};
+
+// Collect all entries
+let entries: Vec<RdbEntry> = shard_store
+    .entries_iter()
+    .map(|(key, entry)| RdbEntry {
+        key: key.as_bytes().to_vec(),
+        value: match &entry.value {
+            Value::HeapStr(s) => RdbValue::String(s.to_vec()),
+            Value::Int(i) => RdbValue::Int(*i),
+            Value::List(l) => RdbValue::List(l.clone()),
+            // ...
+        },
+        ttl_ms: entry.ttl.map(|instant| /* compute remaining TTL */),
+    })
+    .collect();
+
+// Save to disk (atomic write)
+save("dump.rdb", &entries)?;
+```
+
+### Loading Snapshots
+
+```rust
+// Load RDB file
+let entries = load("dump.rdb")?;
+
+// Restore to shard
+for entry in entries {
+    let value = match entry.value {
+        RdbValue::String(s) => Value::from_raw_bytes(&s),
+        RdbValue::Int(i) => Value::Int(i),
+        // ...
+    };
+    
+    let mut key_entry = KeyEntry::new(key, value);
+    if let Some(ttl_ms) = entry.ttl_ms {
+        key_entry.set_ttl(Duration::from_millis(ttl_ms));
+    }
+    
+    shard_store.insert_entry(key, key_entry);
+}
+```
+
+### Atomic Writes
+
+From `kora-storage/src/rdb.rs:67-98`:
+
+```rust
+pub fn save(path: impl AsRef<Path>, entries: &[RdbEntry]) -> Result<()> {
+    let tmp_path = path.with_extension("rdb.tmp");
+    
+    // Write to temporary file
+    let file = File::create(&tmp_path)?;
+    let mut writer = BufWriter::new(file);
+    
+    // ... write data with CRC ...
+    
+    writer.flush()?;
+    writer.get_ref().sync_all()?;  // Fsync
+    
+    // Atomic rename
+    fs::rename(&tmp_path, path)?;
+}
+```
+
+<Accordion title="Why atomic writes?">
+  The temp-file-then-rename pattern ensures:
+  
+  1. **No partial snapshots**: Crash during write leaves old snapshot intact
+  2. **No corruption**: CRC verified before rename
+  3. **Atomic replacement**: Rename is atomic on POSIX systems
+  
+  This guarantees you always have a valid snapshot to recover from.
+</Accordion>
+
+## LZ4 Compression
+
+From `kora-storage/src/compressor.rs`, cold-tier storage uses LZ4 compression:
+
+### Compression
+
+```rust
+use kora_storage::compressor::{compress, decompress};
+
+// Compress data
+let data = b"This is my value that will be compressed";
+let compressed = compress(data)?;
+
+// Compression ratio
+let ratio = compressed.len() as f64 / data.len() as f64;
+println!("Compressed to {:.1}% of original", ratio * 100.0);
+
+// Decompress
+let decompressed = decompress(&compressed)?;
+assert_eq!(data, &decompressed[..]);
+```
+
+### Benefits
+
+<AccordionGroup>
+  <Accordion title="Space savings">
+    Typical compression ratios for cache data:
+    
+    - **JSON**: 60-80% reduction
+    - **Text**: 50-70% reduction
+    - **Numbers**: 30-50% reduction
+    - **Binary**: 10-30% reduction
+  </Accordion>
+  
+  <Accordion title="Fast compression">
+    LZ4 benchmarks:
+    
+    - **Compression**: ~400 MB/s per core
+    - **Decompression**: ~2 GB/s per core
+    - **Minimal CPU overhead** compared to I/O
+  </Accordion>
+  
+  <Accordion title="Adaptive">
+    Compression is applied per-value:
+    
+    - Small values (< 128 bytes): stored uncompressed
+    - Large values: compressed automatically
+    - Incompressible data: detected and stored raw
+  </Accordion>
+</AccordionGroup>
+
+## Storage Manager
+
+From `kora-storage/src/manager.rs`, the `StorageManager` coordinates all persistence layers:
+
+```rust
+use kora_storage::manager::StorageManager;
+
+let manager = StorageManager::new(
+    "data_dir",
+    SyncPolicy::EverySecond,
+)?;
+
+// Write path: WAL + memory
+manager.log_set(key, value, ttl)?;
+
+// Background snapshot
+manager.snapshot()?;
+
+// Load on restart
+manager.restore(|entry| {
+    // Restore entry to shard
+});
+```
+
+### Per-Shard Storage
+
+From `kora-storage/src/shard_storage.rs`, each shard has isolated WAL and RDB:
+
+```text
+data/
+├── shard-0/
+│   ├── kora.wal
+│   └── dump.rdb
+├── shard-1/
+│   ├── kora.wal
+│   └── dump.rdb
+├── shard-2/
+│   ├── kora.wal
+│   └── dump.rdb
+└── ...
+```
+
+**Benefits**:
+
+- Parallel I/O (no contention between shards)
+- Independent snapshots (per-shard recovery)
+- Easier debugging (inspect individual shard files)
+
+## Configuration
+
+### Server Config (TOML)
+
+```toml
+[storage]
+data_dir = "./data"
+sync_policy = "EverySecond"  # EveryWrite | EverySecond | OsManaged
+max_wal_size = 67108864      # 64 MB
+snapshot_interval = 3600     # 1 hour
+
+[compression]
+profile = "balanced"         # none | fast | balanced | high
+min_size = 128              # Don't compress values < 128 bytes
+```
+
+### Programmatic Config
+
+```rust
+use kora_storage::{
+    manager::StorageManager,
+    wal::SyncPolicy,
+};
+
+let manager = StorageManager::builder()
+    .data_dir("./kora-data")
+    .sync_policy(SyncPolicy::EverySecond)
+    .max_wal_size(64 * 1024 * 1024)  // 64 MB
+    .snapshot_interval(Duration::from_secs(3600))
+    .build()?;
+```
+
+## Recovery Flow
+
+<Steps>
+  <Step title="Load RDB Snapshot">
+    If `dump.rdb` exists, load all entries into memory. This is the fastest path to recovery.
+  </Step>
+  
+  <Step title="Replay WAL">
+    Replay `kora.wal` to apply any mutations that occurred after the snapshot. Corrupt entries are skipped with warnings.
+  </Step>
+  
+  <Step title="Start Accepting Traffic">
+    Once both RDB and WAL are loaded, the shard is ready to serve requests.
+  </Step>
+  
+  <Step title="Background Snapshot">
+    Schedule the next snapshot based on `snapshot_interval` or `max_wal_size`.
+  </Step>
+</Steps>
+
+### Crash Recovery Example
+
+```rust
+fn recover_shard(shard_id: u16, data_dir: &Path) -> Result<ShardStore> {
+    let mut store = ShardStore::new(shard_id);
+    let rdb_path = data_dir.join(format!("shard-{}/dump.rdb", shard_id));
+    let wal_path = data_dir.join(format!("shard-{}/kora.wal", shard_id));
+    
+    // 1. Load snapshot
+    if rdb_path.exists() {
+        let entries = rdb::load(&rdb_path)?;
+        for entry in entries {
+            store.insert_entry(/* ... */);
+        }
+    }
+    
+    // 2. Replay WAL
+    if wal_path.exists() {
+        WriteAheadLog::replay(&wal_path, |entry| {
+            match entry {
+                WalEntry::Set { key, value, ttl_ms } => {
+                    store.set_bytes(&key, &value, /* ... */);
+                }
+                // Handle other operations
+                _ => {}
+            }
+        })?;
+    }
+    
+    Ok(store)
+}
+```
+
+## Performance Tuning
+
+<AccordionGroup>
+  <Accordion title="Sync policy based on workload">
+    ```toml
+    # Session cache (ephemeral)
+    sync_policy = "OsManaged"
+    
+    # User profiles (can lose 1 sec)
+    sync_policy = "EverySecond"
+    
+    # Financial data (zero loss)
+    sync_policy = "EveryWrite"
+    ```
+  </Accordion>
+  
+  <Accordion title="Snapshot frequency vs WAL size">
+    ```toml
+    # Small WAL, frequent snapshots (lower recovery time)
+    max_wal_size = 10485760       # 10 MB
+    snapshot_interval = 300       # 5 minutes
+    
+    # Large WAL, infrequent snapshots (lower I/O overhead)
+    max_wal_size = 1073741824     # 1 GB
+    snapshot_interval = 3600      # 1 hour
+    ```
+  </Accordion>
+  
+  <Accordion title="Compression for cold data">
+    ```toml
+    # Fast compression (low CPU, less savings)
+    [compression]
+    profile = "fast"
+    
+    # Balanced (default)
+    [compression]
+    profile = "balanced"
+    
+    # Maximum compression (high CPU, max savings)
+    [compression]
+    profile = "high"
+    ```
+  </Accordion>
+  
+  <Accordion title="I/O backend selection">
+    ```rust
+    #[cfg(target_os = "linux")]
+    use kora_storage::uring_backend::UringBackend;
+    
+    // io_uring on Linux (if available)
+    let backend = UringBackend::new()?;
+    
+    // Fallback to standard file I/O
+    let backend = FileBackend::new();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Monitoring
+
+### Key Metrics
+
+```rust
+// WAL metrics
+let wal_size = wal.bytes_written();
+let wal_entries = wal.entry_count();
+
+// RDB metrics
+let snapshot_size = fs::metadata("dump.rdb")?.len();
+let snapshot_age = SystemTime::now().duration_since(snapshot_mtime)?;
+
+// Compression metrics
+let compression_ratio = compressed_bytes as f64 / original_bytes as f64;
+```
+
+### Health Checks
+
+<Steps>
+  <Step title="WAL size within limit">
+    Alert if WAL exceeds `max_wal_size` without snapshot rotation.
+  </Step>
+  
+  <Step title="Recent snapshot exists">
+    Alert if last snapshot is older than 2× `snapshot_interval`.
+  </Step>
+  
+  <Step title="CRC validation passes">
+    Monitor WAL replay errors during startup.
+  </Step>
+  
+  <Step title="Disk space available">
+    Ensure `data_dir` has space for WAL + RDB + headroom.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="sliders" href="/operations/configuration">
+    Complete storage configuration reference
+  </Card>
+  <Card title="Operations" icon="tools" href="/operations/monitoring">
+    Backup, restore, and disaster recovery
+  </Card>
+  <Card title="Benchmarks" icon="chart-line" href="/operations/performance">
+    Persistence performance metrics
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Deep dive into storage internals
+  </Card>
+</CardGroup>

@@ -1,0 +1,607 @@
+---
+title: List Commands
+description: Commands for manipulating lists in Kora
+---
+
+Lists are ordered collections of strings. Kora supports all standard Redis list operations.
+
+## LPUSH
+
+Insert one or more values at the head of a list.
+
+**Syntax**
+```
+LPUSH key value [value ...]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  One or more values to push
+</ParamField>
+
+**Return value**
+
+<ResponseField name="length" type="integer">
+  The length of the list after the push operation
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> LPUSH mylist "world"
+(integer) 1
+redis-cli> LPUSH mylist "hello"
+(integer) 2
+redis-cli> LRANGE mylist 0 -1
+1) "hello"
+2) "world"
+```
+
+**Time complexity:** O(N) where N is the number of values to push
+
+---
+
+## RPUSH
+
+Insert one or more values at the tail of a list.
+
+**Syntax**
+```
+RPUSH key value [value ...]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  One or more values to push
+</ParamField>
+
+**Return value**
+
+<ResponseField name="length" type="integer">
+  The length of the list after the push operation
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "hello"
+(integer) 1
+redis-cli> RPUSH mylist "world"
+(integer) 2
+redis-cli> LRANGE mylist 0 -1
+1) "hello"
+2) "world"
+```
+
+**Time complexity:** O(N) where N is the number of values to push
+
+---
+
+## LPOP
+
+Remove and return the first element of a list.
+
+**Syntax**
+```
+LPOP key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="string | null">
+  The value of the first element, or null if the list is empty
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "one" "two" "three"
+(integer) 3
+redis-cli> LPOP mylist
+"one"
+redis-cli> LRANGE mylist 0 -1
+1) "two"
+2) "three"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## RPOP
+
+Remove and return the last element of a list.
+
+**Syntax**
+```
+RPOP key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="string | null">
+  The value of the last element, or null if the list is empty
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "one" "two" "three"
+(integer) 3
+redis-cli> RPOP mylist
+"three"
+redis-cli> LRANGE mylist 0 -1
+1) "one"
+2) "two"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## LLEN
+
+Get the length of a list.
+
+**Syntax**
+```
+LLEN key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+**Return value**
+
+<ResponseField name="length" type="integer">
+  The length of the list, or 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "Hello" "World"
+(integer) 2
+redis-cli> LLEN mylist
+(integer) 2
+```
+
+**Time complexity:** O(1)
+
+---
+
+## LRANGE
+
+Get a range of elements from a list.
+
+**Syntax**
+```
+LRANGE key start stop
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="start" type="integer" required>
+  The start index (0-based, negative values count from the end)
+</ParamField>
+
+<ParamField path="stop" type="integer" required>
+  The stop index (inclusive, negative values count from the end)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="elements" type="array">
+  Array of elements in the specified range
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "one" "two" "three" "four"
+(integer) 4
+redis-cli> LRANGE mylist 0 2
+1) "one"
+2) "two"
+3) "three"
+redis-cli> LRANGE mylist -3 -1
+1) "two"
+2) "three"
+3) "four"
+redis-cli> LRANGE mylist 0 -1
+1) "one"
+2) "two"
+3) "three"
+4) "four"
+```
+
+**Time complexity:** O(S+N) where S is the start offset and N is the number of elements in the range
+
+---
+
+## LINDEX
+
+Get an element from a list by its index.
+
+**Syntax**
+```
+LINDEX key index
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="index" type="integer" required>
+  The index (0-based, negative values count from the end)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="element" type="string | null">
+  The element at the index, or null if the index is out of range
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "one" "two" "three"
+(integer) 3
+redis-cli> LINDEX mylist 0
+"one"
+redis-cli> LINDEX mylist -1
+"three"
+redis-cli> LINDEX mylist 5
+(nil)
+```
+
+**Time complexity:** O(N) where N is the number of elements to traverse to reach the index
+
+---
+
+## LSET
+
+Set the value of an element in a list by its index.
+
+**Syntax**
+```
+LSET key index value
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="index" type="integer" required>
+  The index of the element to set
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The new value
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK on success, error if the index is out of range
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "one" "two" "three"
+(integer) 3
+redis-cli> LSET mylist 0 "four"
+OK
+redis-cli> LRANGE mylist 0 -1
+1) "four"
+2) "two"
+3) "three"
+```
+
+**Time complexity:** O(N) where N is the number of elements to traverse to reach the index
+
+---
+
+## LINSERT
+
+Insert an element before or after another element in a list.
+
+**Syntax**
+```
+LINSERT key BEFORE|AFTER pivot value
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="BEFORE|AFTER" type="enum" required>
+  Where to insert relative to the pivot
+</ParamField>
+
+<ParamField path="pivot" type="string" required>
+  The pivot element
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to insert
+</ParamField>
+
+**Return value**
+
+<ResponseField name="length" type="integer">
+  The length of the list after the insert, or -1 if the pivot was not found
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "Hello" "World"
+(integer) 2
+redis-cli> LINSERT mylist BEFORE "World" "Beautiful"
+(integer) 3
+redis-cli> LRANGE mylist 0 -1
+1) "Hello"
+2) "Beautiful"
+3) "World"
+```
+
+**Time complexity:** O(N) where N is the number of elements to traverse to find the pivot
+
+---
+
+## LREM
+
+Remove elements from a list.
+
+**Syntax**
+```
+LREM key count value
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="count" type="integer" required>
+  Number of elements to remove: positive from head, negative from tail, 0 = all occurrences
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to remove
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of removed elements
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "hello" "hello" "foo" "hello"
+(integer) 4
+redis-cli> LREM mylist -2 "hello"
+(integer) 2
+redis-cli> LRANGE mylist 0 -1
+1) "hello"
+2) "foo"
+```
+
+**Time complexity:** O(N+M) where N is the length of the list and M is the number of removed elements
+
+---
+
+## LTRIM
+
+Trim a list to the specified range.
+
+**Syntax**
+```
+LTRIM key start stop
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="start" type="integer" required>
+  The start index
+</ParamField>
+
+<ParamField path="stop" type="integer" required>
+  The stop index (inclusive)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  Always returns OK
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "one" "two" "three" "four" "five"
+(integer) 5
+redis-cli> LTRIM mylist 1 -1
+OK
+redis-cli> LRANGE mylist 0 -1
+1) "two"
+2) "three"
+3) "four"
+4) "five"
+```
+
+**Time complexity:** O(N) where N is the number of elements to be removed
+
+---
+
+## LPOS
+
+Return the index of matching elements in a list.
+
+**Syntax**
+```
+LPOS key value [RANK rank] [COUNT count] [MAXLEN len]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the list
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to search for
+</ParamField>
+
+<ParamField path="RANK" type="integer">
+  Skip N matches before returning (can be negative to search from tail)
+</ParamField>
+
+<ParamField path="COUNT" type="integer">
+  Return up to COUNT positions (0 = all)
+</ParamField>
+
+<ParamField path="MAXLEN" type="integer">
+  Limit the search to MAXLEN elements
+</ParamField>
+
+**Return value**
+
+<ResponseField name="position" type="integer | array | null">
+  The position(s) of the element, or null if not found
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "a" "b" "c" "1" "2" "3" "c" "c"
+(integer) 8
+redis-cli> LPOS mylist "c"
+(integer) 2
+redis-cli> LPOS mylist "c" RANK 2
+(integer) 6
+redis-cli> LPOS mylist "c" COUNT 0
+1) (integer) 2
+2) (integer) 6
+3) (integer) 7
+```
+
+**Time complexity:** O(N) where N is the number of elements scanned
+
+---
+
+## RPOPLPUSH
+
+Remove the last element in a list, prepend it to another list and return it.
+
+**Syntax**
+```
+RPOPLPUSH source destination
+```
+
+<ParamField path="source" type="string" required>
+  The source list
+</ParamField>
+
+<ParamField path="destination" type="string" required>
+  The destination list
+</ParamField>
+
+**Return value**
+
+<ResponseField name="element" type="string | null">
+  The element being popped and pushed, or null if source is empty
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "one" "two" "three"
+(integer) 3
+redis-cli> RPOPLPUSH mylist myotherlist
+"three"
+redis-cli> LRANGE mylist 0 -1
+1) "one"
+2) "two"
+redis-cli> LRANGE myotherlist 0 -1
+1) "three"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## LMOVE
+
+Pop an element from a list, push it to another list and return it.
+
+**Syntax**
+```
+LMOVE source destination LEFT|RIGHT LEFT|RIGHT
+```
+
+<ParamField path="source" type="string" required>
+  The source list
+</ParamField>
+
+<ParamField path="destination" type="string" required>
+  The destination list
+</ParamField>
+
+<ParamField path="from" type="enum" required>
+  LEFT or RIGHT - where to pop from source
+</ParamField>
+
+<ParamField path="to" type="enum" required>
+  LEFT or RIGHT - where to push to destination
+</ParamField>
+
+**Return value**
+
+<ResponseField name="element" type="string | null">
+  The element being moved, or null if source is empty
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> RPUSH mylist "one" "two" "three"
+(integer) 3
+redis-cli> LMOVE mylist myotherlist RIGHT LEFT
+"three"
+redis-cli> LMOVE mylist myotherlist LEFT RIGHT
+"one"
+redis-cli> LRANGE mylist 0 -1
+1) "two"
+redis-cli> LRANGE myotherlist 0 -1
+1) "three"
+2) "one"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## Redis Compatibility
+
+Kora implements all standard Redis list commands with identical semantics.

@@ -1,0 +1,562 @@
+---
+title: Installation
+description: Build, configure, and deploy Kora in your environment
+---
+
+## System Requirements
+
+### Minimum Requirements
+
+- **Operating System:** Linux (kernel 5.4+), macOS (10.15+), Windows (WSL2)
+- **Rust:** 1.82 or later (edition 2021)
+- **Memory:** 512 MB minimum, 2 GB recommended
+- **Disk:** 100 MB for binary, additional space for data persistence
+
+### Recommended Requirements
+
+- **CPU:** 4+ cores for optimal multi-threaded performance
+- **Memory:** 4 GB+ for production workloads
+- **Disk:** SSD for persistence (WAL + RDB snapshots)
+
+<Note>
+Kora scales linearly with CPU cores. More cores = better throughput.
+</Note>
+
+## Installing Rust
+
+If you don't have Rust installed, use rustup:
+
+<CodeGroup>
+
+```bash Linux/macOS
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+```
+
+```bash Windows (PowerShell)
+# Download and run rustup-init.exe from:
+# https://rustup.rs
+```
+
+</CodeGroup>
+
+Verify the installation:
+
+```bash
+rustc --version  # Should show 1.82 or higher
+cargo --version
+```
+
+<Warning>
+Kora requires Rust 1.82+ (MSRV). Earlier versions will not compile.
+</Warning>
+
+## Building from Source
+
+<Steps>
+
+### Clone the repository
+
+```bash
+git clone https://github.com/Augani/Kora.git
+cd kora
+```
+
+### Build the workspace
+
+Build all crates in release mode:
+
+```bash
+cargo build --release
+```
+
+This compiles the entire workspace:
+- `kora-core` — data structures and shard engine
+- `kora-protocol` — RESP2 parser/serializer
+- `kora-server` — TCP/Unix server
+- `kora-embedded` — library mode API
+- `kora-storage` — WAL + RDB persistence
+- `kora-vector` — HNSW vector search
+- `kora-cdc` — change data capture
+- `kora-doc` — JSON document database
+- `kora-pubsub` — pub/sub messaging
+- `kora-observability` — metrics and stats
+- `kora-cli` — CLI binary
+
+<Note>
+The first build takes 5-10 minutes. Subsequent builds are incremental and much faster.
+</Note>
+
+### Verify the build
+
+Check that the binary was created:
+
+```bash
+ls -lh ./target/release/kora-cli
+```
+
+You should see a binary of approximately 8-12 MB (stripped).
+
+### Run tests (optional)
+
+Run the full test suite to verify everything works:
+
+```bash
+# Run all workspace tests
+cargo test --workspace
+
+# Run tests for a specific crate
+cargo test -p kora-core
+cargo test -p kora-protocol
+
+# Run integration tests
+cargo test --test integration -p kora-server
+```
+
+### Run linters (optional)
+
+Ensure code quality:
+
+```bash
+# Run clippy (lint checks)
+cargo clippy --workspace --all-targets
+
+# Format code
+cargo fmt --all
+```
+
+</Steps>
+
+## Installation Options
+
+### Option 1: Run from build directory
+
+Run Kora directly from the build directory:
+
+```bash
+./target/release/kora-cli --port 6379 --workers 4
+```
+
+### Option 2: Install to system path
+
+Install the binary to `~/.cargo/bin` (automatically in PATH):
+
+```bash
+cargo install --path kora-cli
+
+# Now you can run from anywhere
+kora --port 6379
+```
+
+### Option 3: Copy to custom location
+
+Copy the binary to a custom location:
+
+```bash
+sudo cp ./target/release/kora-cli /usr/local/bin/kora
+sudo chmod +x /usr/local/bin/kora
+
+# Run from anywhere
+kora --port 6379
+```
+
+## Configuration
+
+Kora supports three layers of configuration, applied in order of precedence:
+
+1. **Built-in defaults** — sensible defaults for local development
+2. **TOML config file** — persistent configuration
+3. **CLI arguments** — runtime overrides
+
+### CLI Arguments
+
+All configuration options are available as command-line flags:
+
+```bash
+kora-cli \
+  --bind 0.0.0.0 \
+  --port 6379 \
+  --workers 8 \
+  --log-level info \
+  --password "s3cret" \
+  --data-dir /var/lib/kora \
+  --snapshot-interval-secs 300 \
+  --snapshot-retain 24 \
+  --cdc-capacity 65536 \
+  --metrics-port 9090 \
+  --unix-socket /tmp/kora.sock
+```
+
+#### Common CLI Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bind` | `127.0.0.1` | Address to bind to |
+| `--port` | `6379` | TCP port to listen on |
+| `--workers` | CPU cores | Number of shard worker threads |
+| `--log-level` | `info` | Log level (trace, debug, info, warn, error) |
+| `--password` | None | Optional AUTH password |
+| `--data-dir` | None | Data directory for persistence |
+| `--config` | `kora.toml` | Path to TOML config file |
+| `--metrics-port` | `0` | Prometheus metrics HTTP endpoint (0 = disabled) |
+| `--unix-socket` | None | Optional Unix socket path |
+
+### TOML Configuration File
+
+Create a `kora.toml` file for persistent configuration:
+
+```toml
+bind = "0.0.0.0"
+port = 6379
+workers = 8
+log_level = "info"
+password = "s3cret"
+cdc_capacity = 65536
+metrics_port = 9090
+unix_socket = "/tmp/kora.sock"
+
+[storage]
+data_dir = "/var/lib/kora"
+wal_sync = "every_second"   # every_write | every_second | os_managed
+wal_enabled = true
+rdb_enabled = true
+snapshot_interval_secs = 300
+snapshot_retain = 24
+wal_max_bytes = 67108864  # 64 MB
+```
+
+Load the config file:
+
+```bash
+# Uses kora.toml in current directory by default
+kora-cli
+
+# Or specify a custom path
+kora-cli --config /etc/kora/kora.toml
+```
+
+<Note>
+CLI arguments override config file values. This allows environment-specific overrides while keeping base configuration in the file.
+</Note>
+
+### Storage Configuration
+
+Kora supports three persistence modes:
+
+#### 1. In-Memory Only (Default)
+
+No persistence — data lost on restart:
+
+```bash
+kora-cli --port 6379
+```
+
+#### 2. Write-Ahead Log (WAL)
+
+Durable, append-only log with configurable sync policy:
+
+```toml
+[storage]
+data_dir = "/var/lib/kora"
+wal_enabled = true
+wal_sync = "every_second"  # every_write | every_second | os_managed
+wal_max_bytes = 67108864   # Auto-rotate at 64 MB
+```
+
+**Sync Policies:**
+- `every_write` — Fsync after every write (slowest, most durable)
+- `every_second` — Fsync every second (balanced)
+- `os_managed` — Let OS decide (fastest, least durable)
+
+#### 3. RDB Snapshots
+
+Periodic atomic snapshots with CRC verification:
+
+```toml
+[storage]
+data_dir = "/var/lib/kora"
+rdb_enabled = true
+snapshot_interval_secs = 300  # Snapshot every 5 minutes
+snapshot_retain = 24          # Keep last 24 snapshots
+```
+
+#### 4. WAL + RDB (Recommended)
+
+Combine both for optimal durability and recovery:
+
+```toml
+[storage]
+data_dir = "/var/lib/kora"
+wal_enabled = true
+wal_sync = "every_second"
+rdb_enabled = true
+snapshot_interval_secs = 300
+snapshot_retain = 24
+wal_max_bytes = 67108864
+```
+
+### Environment Setup
+
+#### Create data directory
+
+```bash
+sudo mkdir -p /var/lib/kora
+sudo chown $USER:$USER /var/lib/kora
+```
+
+#### Set log level via environment
+
+```bash
+export RUST_LOG=kora=debug,kora_server=trace
+kora-cli
+```
+
+#### Increase file descriptor limit
+
+For high-concurrency workloads:
+
+```bash
+# Temporary (current shell)
+ulimit -n 65536
+
+# Permanent (add to /etc/security/limits.conf)
+* soft nofile 65536
+* hard nofile 65536
+```
+
+## Running as a Service
+
+### systemd (Linux)
+
+Create `/etc/systemd/system/kora.service`:
+
+```ini
+[Unit]
+Description=Kora Cache Engine
+After=network.target
+
+[Service]
+Type=simple
+User=kora
+Group=kora
+WorkingDirectory=/var/lib/kora
+ExecStart=/usr/local/bin/kora --config /etc/kora/kora.toml
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable kora
+sudo systemctl start kora
+sudo systemctl status kora
+```
+
+View logs:
+
+```bash
+sudo journalctl -u kora -f
+```
+
+### Docker
+
+Create a `Dockerfile`:
+
+```dockerfile
+FROM rust:1.82 as builder
+
+WORKDIR /build
+COPY . .
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    libssl3 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/kora-cli /usr/local/bin/kora
+
+EXPOSE 6379
+VOLUME ["/data"]
+
+ENTRYPOINT ["kora"]
+CMD ["--bind", "0.0.0.0", "--data-dir", "/data"]
+```
+
+Build and run:
+
+```bash
+docker build -t kora:latest .
+docker run -d -p 6379:6379 -v kora-data:/data --name kora kora:latest
+```
+
+## Verification Steps
+
+<Steps>
+
+### Check the server is running
+
+```bash
+ps aux | grep kora-cli
+```
+
+### Test connectivity
+
+```bash
+redis-cli -p 6379 PING
+# Expected: PONG
+```
+
+### Check server info
+
+```bash
+redis-cli -p 6379 INFO
+```
+
+### Test basic operations
+
+```bash
+redis-cli -p 6379 SET test:key "hello"
+redis-cli -p 6379 GET test:key
+# Expected: "hello"
+```
+
+### Monitor metrics (if enabled)
+
+```bash
+curl http://localhost:9090/metrics
+```
+
+</Steps>
+
+## Build Options
+
+### Development Build
+
+Faster compilation, slower runtime:
+
+```bash
+cargo build
+./target/debug/kora-cli
+```
+
+### Release Build (Recommended)
+
+Optimized for production:
+
+```bash
+cargo build --release
+./target/release/kora-cli
+```
+
+### Profile-Guided Optimization (PGO)
+
+For maximum performance:
+
+```bash
+# Step 1: Build instrumented binary
+RUSTFLAGS="-Cprofile-generate=/tmp/pgo-data" cargo build --release
+
+# Step 2: Run representative workload
+./target/release/kora-cli &
+memtier_benchmark -p 6379 -t 4 -c 50 --test-time=60
+killall kora-cli
+
+# Step 3: Merge profiling data
+llvm-profdata merge -o /tmp/pgo-data/merged.profdata /tmp/pgo-data
+
+# Step 4: Build with profile data
+RUSTFLAGS="-Cprofile-use=/tmp/pgo-data/merged.profdata" cargo build --release
+```
+
+### Feature Flags
+
+Kora uses Cargo features for optional functionality:
+
+```bash
+# Build without server features (embedded only)
+cargo build --release --no-default-features -p kora-embedded
+
+# Build with additional features
+cargo build --release --features server
+```
+
+## Troubleshooting
+
+### Compilation Errors
+
+**Error: Rust version too old**
+```bash
+rustup update
+rustc --version  # Verify 1.82+
+```
+
+**Error: Linker not found**
+```bash
+# Ubuntu/Debian
+sudo apt-get install build-essential
+
+# macOS
+xcode-select --install
+```
+
+### Runtime Issues
+
+**Error: Address already in use**
+```bash
+# Find what's using the port
+lsof -i :6379
+
+# Use a different port
+kora-cli --port 7379
+```
+
+**Error: Permission denied (data directory)**
+```bash
+# Fix permissions
+sudo chown -R $USER:$USER /var/lib/kora
+```
+
+**Error: Too many open files**
+```bash
+# Increase file descriptor limit
+ulimit -n 65536
+```
+
+### Performance Issues
+
+**Low throughput**
+- Ensure you built with `--release`
+- Check worker count matches CPU cores: `--workers $(nproc)`
+- Monitor CPU usage: `top` or `htop`
+- Check for disk I/O bottlenecks if using persistence
+
+**High latency**
+- Use `every_second` or `os_managed` WAL sync policy
+- Disable persistence for testing: remove `--data-dir`
+- Check network latency: `ping` your server
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Start using Kora with basic commands
+  </Card>
+  <Card title="Configuration" icon="gear" href="/operations/configuration">
+    Advanced configuration options
+  </Card>
+  <Card title="Commands" icon="terminal" href="/api/string-commands">
+    Complete command reference
+  </Card>
+  <Card title="Production Deployment" icon="server" href="/operations/security">
+    Deploy Kora in production
+  </Card>
+</CardGroup>

@@ -1,97 +1,128 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Kora - Multi-threaded Cache Engine"
+description: "A multi-threaded, embeddable, memory-safe cache engine with RESP2 protocol compatibility, JSON document database, vector search, and CDC capabilities"
 ---
 
-## Setting up
+<div className="bg-white border border-[#e0e0e0] rounded-lg shadow-[0_2px_8px_rgba(0,0,0,0.05)] p-8 mb-8">
+  <h1 className="font-bold text-5xl text-[#1a1a1a] mb-4">Kora</h1>
+  <p className="text-lg text-[#1a1a1a] mb-6">
+    A multi-threaded, embeddable, memory-safe cache engine built on a shared-nothing, shard-affinity architecture. 
+    Kora speaks RESP2 on the wire, making it compatible with all Redis clients, while offering advanced features 
+    like JSON document databases, HNSW vector search, and change data capture.
+  </p>
+  <div className="flex gap-4">
+    <a 
+      href="/quickstart" 
+      className="inline-block bg-[#e6e6e6] text-[#1a1a1a] px-6 py-3 rounded-md font-bold hover:opacity-80 transition-opacity"
+    >
+      Get Started
+    </a>
+    <a 
+      href="https://github.com/Augani/Kora" 
+      className="inline-block bg-transparent text-[#1a1a1a] px-6 py-3 font-bold hover:opacity-80 transition-opacity border border-[#1a1a1a]"
+    >
+      View on GitHub
+    </a>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## Key Features
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Multi-threaded Architecture" icon="gauge-high" href="/concepts/threading-model">
+    Shard-affinity I/O with each worker owning both data and connections. Scales linearly with CPU cores.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="RESP2 Protocol" icon="network-wired" href="/concepts/resp-protocol">
+    Wire-compatible with Redis. Use redis-cli, Jedis, ioredis, or any Redis client out of the box.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Document Database" icon="database" href="/features/document-database">
+    JSON-native storage with secondary indexes, WHERE queries, and SQL-like operators.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Vector Search" icon="vector-square" href="/features/vector-search">
+    HNSW approximate nearest neighbor search with cosine, L2, and inner product metrics.
   </Card>
-</Columns>
+  <Card title="Change Data Capture" icon="rotate" href="/features/change-data-capture">
+    Per-shard ring buffers with cursor-based subscriptions and gap detection.
+  </Card>
+  <Card title="Persistence Layer" icon="hard-drive" href="/features/persistence">
+    WAL and RDB snapshots with CRC verification and LZ4-compressed cold-tier storage.
+  </Card>
+  <Card title="Pub/Sub Messaging" icon="tower-broadcast" href="/features/pubsub">
+    SUBSCRIBE, PSUBSCRIBE, and PUBLISH with glob pattern matching.
+  </Card>
+  <Card title="Embeddable Library" icon="code" href="/development/embedded-mode">
+    Same multi-threaded engine runs in-process with zero network overhead.
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Start
 
-Everything you need to create world-class documentation.
+<Steps>
+  <Step title="Build from Source">
+    Clone the repository and build with Cargo:
+    ```bash
+    git clone https://github.com/Augani/Kora.git
+    cd kora
+    cargo build --release
+    ```
+  </Step>
+  
+  <Step title="Start the Server">
+    Launch Kora with your desired configuration:
+    ```bash
+    ./target/release/kora-cli --port 6379 --workers 4
+    ```
+  </Step>
+  
+  <Step title="Connect with Redis CLI">
+    Use any Redis client to connect:
+    ```bash
+    redis-cli -p 6379
+    127.0.0.1:6379> SET greeting "hello world"
+    OK
+    127.0.0.1:6379> GET greeting
+    "hello world"
+    ```
+  </Step>
+</Steps>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Performance
 
-## Need inspiration?
+Benchmarked on AWS m5.xlarge (4 vCPU, 16GB RAM) with memtier_benchmark and 200 clients:
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+- **+66% throughput** vs Redis on SET/GET workloads
+- **+51% throughput** vs Redis on pipelined operations
+- **Sub-millisecond p50 latency** across all workloads
+
+See [Performance](/operations/performance) for detailed benchmarks.
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="High-Performance Cache" icon="bolt">
+    Drop-in Redis replacement with multi-threaded performance and linear scaling.
+  </Card>
+  <Card title="Semantic Search" icon="magnifying-glass">
+    HNSW vector index for embedding-based similarity search and RAG applications.
+  </Card>
+  <Card title="Real-time Analytics" icon="chart-line">
+    Document database with secondary indexes for fast filtering and aggregation.
+  </Card>
+  <Card title="Event Streaming" icon="stream">
+    Change data capture for building event-driven architectures and data pipelines.
+  </Card>
+</CardGroup>
+
+## Learn More
+
+<CardGroup cols={3}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the shard-affinity design
+  </Card>
+  <Card title="Configuration" icon="gear" href="/operations/configuration">
+    Configure Kora for your workload
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/string-commands">
+    Explore all available commands
+  </Card>
+</CardGroup>

@@ -1,0 +1,727 @@
+---
+title: Database API
+description: Core API reference for the embedded Kōra database
+---
+
+The `Database` struct is the primary entry point for the embedded API. It owns a multi-threaded shard engine and document engine, exposing typed methods for key-value, list, hash, set, vector, and document operations.
+
+All methods are safe to call from multiple threads simultaneously. Key-value operations route through per-shard channels and block the caller until the owning shard worker completes the command.
+
+## Opening a Database
+
+### `Database::open`
+
+```rust
+pub fn open(config: Config) -> Self
+```
+
+Open a new database with the given configuration. This spawns `config.shard_count` background worker threads that remain alive for the lifetime of the returned `Database`.
+
+**Example:**
+
+```rust
+use kora_embedded::{Config, Database};
+
+let db = Database::open(Config::default());
+db.set("greeting", b"hello world");
+assert_eq!(db.get("greeting"), Some(b"hello world".to_vec()));
+```
+
+**Multi-threaded usage:**
+
+```rust
+use kora_embedded::{Config, Database};
+use std::sync::Arc;
+
+let db = Arc::new(Database::open(Config { shard_count: 4 }));
+db.set("counter", b"0");
+db.incr("counter").unwrap();
+assert_eq!(db.get("counter"), Some(b"1".to_vec()));
+```
+
+## String Operations
+
+### `get`
+
+```rust
+pub fn get(&self, key: &str) -> Option<Vec<u8>>
+```
+
+Return the value stored at `key`, or `None` if the key does not exist.
+
+**Example:**
+
+```rust
+db.set("hello", b"world");
+assert_eq!(db.get("hello"), Some(b"world".to_vec()));
+assert_eq!(db.get("nonexistent"), None);
+```
+
+### `set`
+
+```rust
+pub fn set(&self, key: &str, value: &[u8])
+```
+
+Store a key-value pair, overwriting any existing value.
+
+**Example:**
+
+```rust
+db.set("user:1", b"Alice");
+db.set("user:1", b"Bob"); // overwrites
+```
+
+### `set_ex`
+
+```rust
+pub fn set_ex(&self, key: &str, value: &[u8], ttl: Duration)
+```
+
+Store a key-value pair that expires after `ttl`.
+
+**Example:**
+
+```rust
+use std::time::Duration;
+
+db.set_ex("session:abc", b"user_data", Duration::from_secs(3600));
+```
+
+### `del`
+
+```rust
+pub fn del(&self, key: &str) -> bool
+```
+
+Delete a key. Returns `true` if the key existed.
+
+**Example:**
+
+```rust
+db.set("temp", b"value");
+assert!(db.del("temp"));
+assert!(!db.del("temp")); // already deleted
+```
+
+### `exists`
+
+```rust
+pub fn exists(&self, key: &str) -> bool
+```
+
+Check whether `key` exists in the store.
+
+**Example:**
+
+```rust
+db.set("key", b"value");
+assert!(db.exists("key"));
+assert!(!db.exists("nonexistent"));
+```
+
+### `incr`
+
+```rust
+pub fn incr(&self, key: &str) -> Result<i64, String>
+```
+
+Atomically increment a key's integer value by 1, returning the new value.
+
+**Example:**
+
+```rust
+assert_eq!(db.incr("counter").unwrap(), 1);
+assert_eq!(db.incr("counter").unwrap(), 2);
+assert_eq!(db.incr("counter").unwrap(), 3);
+```
+
+### `decr`
+
+```rust
+pub fn decr(&self, key: &str) -> Result<i64, String>
+```
+
+Atomically decrement a key's integer value by 1, returning the new value.
+
+### `incrby`
+
+```rust
+pub fn incrby(&self, key: &str, delta: i64) -> Result<i64, String>
+```
+
+Atomically increment a key's integer value by `delta`, returning the new value.
+
+**Example:**
+
+```rust
+db.set("score", b"10");
+assert_eq!(db.incrby("score", 5).unwrap(), 15);
+```
+
+### `decrby`
+
+```rust
+pub fn decrby(&self, key: &str, delta: i64) -> Result<i64, String>
+```
+
+Atomically decrement a key's integer value by `delta`, returning the new value.
+
+### `getset`
+
+```rust
+pub fn getset(&self, key: &str, value: &[u8]) -> Option<Vec<u8>>
+```
+
+Atomically set `key` to `value` and return the previous value, if any.
+
+**Example:**
+
+```rust
+db.set("counter", b"1");
+let old = db.getset("counter", b"2");
+assert_eq!(old, Some(b"1".to_vec()));
+assert_eq!(db.get("counter"), Some(b"2".to_vec()));
+```
+
+### `append`
+
+```rust
+pub fn append(&self, key: &str, value: &[u8]) -> i64
+```
+
+Append `value` to the string stored at `key`, returning the new byte length.
+
+**Example:**
+
+```rust
+db.set("message", b"Hello");
+let len = db.append("message", b" World");
+assert_eq!(len, 11);
+assert_eq!(db.get("message"), Some(b"Hello World".to_vec()));
+```
+
+### `strlen`
+
+```rust
+pub fn strlen(&self, key: &str) -> i64
+```
+
+Get the length of the string value stored at key.
+
+### `mget`
+
+```rust
+pub fn mget(&self, keys: &[&str]) -> Vec<Option<Vec<u8>>>
+```
+
+Return the values of multiple keys in a single call. Missing keys appear as `None`, preserving positional correspondence with `keys`.
+
+**Example:**
+
+```rust
+db.set("key1", b"value1");
+db.set("key2", b"value2");
+let values = db.mget(&["key1", "missing", "key2"]);
+assert_eq!(values, vec![
+    Some(b"value1".to_vec()),
+    None,
+    Some(b"value2".to_vec())
+]);
+```
+
+### `mset`
+
+```rust
+pub fn mset(&self, entries: &[(&str, &[u8])])
+```
+
+Store multiple key-value pairs in a single call.
+
+**Example:**
+
+```rust
+db.mset(&[
+    ("key1", b"value1"),
+    ("key2", b"value2"),
+    ("key3", b"value3")
+]);
+```
+
+### `setnx`
+
+```rust
+pub fn setnx(&self, key: &str, value: &[u8]) -> bool
+```
+
+Store a key-value pair only if the key does not already exist. Returns `true` if the key was set, `false` if it already existed.
+
+**Example:**
+
+```rust
+assert!(db.setnx("lock", b"owner1")); // acquired
+assert!(!db.setnx("lock", b"owner2")); // already exists
+```
+
+### `expire`
+
+```rust
+pub fn expire(&self, key: &str, seconds: u64) -> bool
+```
+
+Set a time-to-live on `key`. Returns `true` if the key exists.
+
+**Example:**
+
+```rust
+db.set("session", b"data");
+assert!(db.expire("session", 3600)); // 1 hour TTL
+```
+
+### `persist`
+
+```rust
+pub fn persist(&self, key: &str) -> bool
+```
+
+Remove the time-to-live on `key`, making it persistent. Returns `true` if the key existed and had a TTL.
+
+### `ttl`
+
+```rust
+pub fn ttl(&self, key: &str) -> Option<i64>
+```
+
+Return the remaining time-to-live (in seconds) for `key`. Returns `None` if the key does not exist or has no TTL set.
+
+### `key_type`
+
+```rust
+pub fn key_type(&self, key: &str) -> String
+```
+
+Return the data type of the value stored at `key` (e.g. `"string"`, `"list"`, `"hash"`, `"set"`, `"none"`).
+
+### `keys`
+
+```rust
+pub fn keys(&self, pattern: &str) -> Vec<Vec<u8>>
+```
+
+Find all keys matching a glob pattern.
+
+**Example:**
+
+```rust
+db.set("user:1", b"Alice");
+db.set("user:2", b"Bob");
+db.set("config:max", b"100");
+
+let user_keys = db.keys("user:*");
+assert_eq!(user_keys.len(), 2);
+```
+
+## List Operations
+
+### `lpush`
+
+```rust
+pub fn lpush(&self, key: &str, values: &[&[u8]]) -> i64
+```
+
+Prepend one or more values to a list, returning the new length.
+
+**Example:**
+
+```rust
+let len = db.lpush("tasks", &[b"task3", b"task2", b"task1"]);
+assert_eq!(len, 3);
+```
+
+### `rpush`
+
+```rust
+pub fn rpush(&self, key: &str, values: &[&[u8]]) -> i64
+```
+
+Append one or more values to a list, returning the new length.
+
+**Example:**
+
+```rust
+db.rpush("list", &[b"a", b"b", b"c"]);
+let items = db.lrange("list", 0, -1);
+assert_eq!(items, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+```
+
+### `lrange`
+
+```rust
+pub fn lrange(&self, key: &str, start: i64, stop: i64) -> Vec<Vec<u8>>
+```
+
+Return a contiguous range of elements from a list. Negative indices count from the end (`-1` is the last element).
+
+**Example:**
+
+```rust
+db.rpush("numbers", &[b"1", b"2", b"3", b"4", b"5"]);
+assert_eq!(db.lrange("numbers", 1, 3).len(), 3); // indices 1, 2, 3
+assert_eq!(db.lrange("numbers", 0, -1).len(), 5); // all elements
+```
+
+### `lpop`
+
+```rust
+pub fn lpop(&self, key: &str) -> Option<Vec<u8>>
+```
+
+Remove and return the first element of a list.
+
+**Example:**
+
+```rust
+db.rpush("queue", &[b"first", b"second"]);
+assert_eq!(db.lpop("queue"), Some(b"first".to_vec()));
+assert_eq!(db.llen("queue"), 1);
+```
+
+### `rpop`
+
+```rust
+pub fn rpop(&self, key: &str) -> Option<Vec<u8>>
+```
+
+Remove and return the last element of a list.
+
+### `llen`
+
+```rust
+pub fn llen(&self, key: &str) -> i64
+```
+
+Return the number of elements in a list.
+
+### `lindex`
+
+```rust
+pub fn lindex(&self, key: &str, index: i64) -> Option<Vec<u8>>
+```
+
+Return the element at `index` in a list, or `None` if out of range.
+
+**Example:**
+
+```rust
+db.rpush("items", &[b"a", b"b", b"c"]);
+assert_eq!(db.lindex("items", 1), Some(b"b".to_vec()));
+assert_eq!(db.lindex("items", 10), None);
+```
+
+## Hash Operations
+
+### `hset`
+
+```rust
+pub fn hset(&self, key: &str, field: &str, value: &[u8])
+```
+
+Set a field in a hash, creating the hash if it does not exist.
+
+**Example:**
+
+```rust
+db.hset("user", "name", b"Alice");
+assert_eq!(db.hget("user", "name"), Some(b"Alice".to_vec()));
+assert_eq!(db.hget("user", "age"), None);
+```
+
+### `hget`
+
+```rust
+pub fn hget(&self, key: &str, field: &str) -> Option<Vec<u8>>
+```
+
+Return the value of a hash field, or `None` if the field or hash does not exist.
+
+### `hdel`
+
+```rust
+pub fn hdel(&self, key: &str, fields: &[&str]) -> i64
+```
+
+Remove one or more fields from a hash, returning the number of fields removed.
+
+**Example:**
+
+```rust
+db.hset("user", "name", b"Alice");
+db.hset("user", "age", b"30");
+let removed = db.hdel("user", &["age", "nonexistent"]);
+assert_eq!(removed, 1);
+```
+
+### `hgetall`
+
+```rust
+pub fn hgetall(&self, key: &str) -> Vec<(Vec<u8>, Vec<u8>)>
+```
+
+Return all field-value pairs from a hash.
+
+**Example:**
+
+```rust
+db.hset("user", "name", b"Alice");
+db.hset("user", "age", b"30");
+let all = db.hgetall("user");
+assert_eq!(all.len(), 2);
+```
+
+### `hlen`
+
+```rust
+pub fn hlen(&self, key: &str) -> i64
+```
+
+Return the number of fields in a hash.
+
+### `hexists`
+
+```rust
+pub fn hexists(&self, key: &str, field: &str) -> bool
+```
+
+Check whether a field exists in a hash.
+
+### `hincrby`
+
+```rust
+pub fn hincrby(&self, key: &str, field: &str, delta: i64) -> Result<i64, String>
+```
+
+Atomically increment a hash field's integer value by `delta`, returning the new value.
+
+**Example:**
+
+```rust
+db.hset("stats", "views", b"10");
+assert_eq!(db.hincrby("stats", "views", 5).unwrap(), 15);
+```
+
+## Set Operations
+
+### `sadd`
+
+```rust
+pub fn sadd(&self, key: &str, members: &[&[u8]]) -> i64
+```
+
+Add one or more members to a set, returning the number of new members added.
+
+**Example:**
+
+```rust
+db.sadd("tags", &[b"rust", b"cache", b"rust"]);
+let members = db.smembers("tags");
+assert_eq!(members.len(), 2); // "rust" deduplicated
+```
+
+### `smembers`
+
+```rust
+pub fn smembers(&self, key: &str) -> Vec<Vec<u8>>
+```
+
+Return all members of a set.
+
+### `srem`
+
+```rust
+pub fn srem(&self, key: &str, members: &[&[u8]]) -> i64
+```
+
+Remove one or more members from a set, returning the number of members removed.
+
+### `sismember`
+
+```rust
+pub fn sismember(&self, key: &str, member: &[u8]) -> bool
+```
+
+Check whether `member` belongs to the set stored at `key`.
+
+**Example:**
+
+```rust
+db.sadd("tags", &[b"rust", b"cache"]);
+assert!(db.sismember("tags", b"rust"));
+assert!(!db.sismember("tags", b"python"));
+```
+
+### `scard`
+
+```rust
+pub fn scard(&self, key: &str) -> i64
+```
+
+Return the number of members in a set.
+
+## Vector Operations
+
+### `vector_set`
+
+```rust
+pub fn vector_set(&self, index: &str, dim: usize, vector: &[f32]) -> Result<u64, String>
+```
+
+Insert a vector into a named index, returning the vector ID. Creates the index if it does not exist.
+
+**Example:**
+
+```rust
+let v1 = vec![1.0f32, 0.0, 0.0, 0.0];
+let v2 = vec![0.0f32, 1.0, 0.0, 0.0];
+let v3 = vec![1.0f32, 1.0, 0.0, 0.0];
+
+let id1 = db.vector_set("my_idx", 4, &v1).unwrap();
+let id2 = db.vector_set("my_idx", 4, &v2).unwrap();
+let id3 = db.vector_set("my_idx", 4, &v3).unwrap();
+```
+
+### `vector_search`
+
+```rust
+pub fn vector_search(
+    &self,
+    index: &str,
+    query: &[f32],
+    k: usize,
+) -> Result<Vec<(u64, f32)>, String>
+```
+
+Search for the K nearest neighbors of a query vector. Returns a list of `(id, distance)` pairs sorted by distance.
+
+**Example:**
+
+```rust
+let query = vec![1.0f32, 0.0, 0.0, 0.0];
+let results = db.vector_search("my_idx", &query, 3).unwrap();
+assert!(!results.is_empty());
+assert!(results[0].1 < 0.001, "first result should be near-exact match");
+```
+
+### `vector_del`
+
+```rust
+pub fn vector_del(&self, index: &str) -> Result<bool, String>
+```
+
+Delete an entire vector index. Returns `true` if it existed.
+
+**Example:**
+
+```rust
+assert!(db.vector_del("my_idx").unwrap());
+assert!(!db.vector_del("my_idx").unwrap()); // already deleted
+```
+
+## Server Operations
+
+### `db_size`
+
+```rust
+pub fn db_size(&self) -> i64
+```
+
+Return the total number of keys across all shards.
+
+**Example:**
+
+```rust
+db.set("a", b"1");
+db.set("b", b"2");
+assert_eq!(db.db_size(), 2);
+```
+
+### `flush_db`
+
+```rust
+pub fn flush_db(&self)
+```
+
+Remove all keys from every shard.
+
+**Example:**
+
+```rust
+db.set("a", b"1");
+db.set("b", b"2");
+db.flush_db();
+assert_eq!(db.db_size(), 0);
+```
+
+## Engine Access
+
+### `engine`
+
+```rust
+pub fn engine(&self) -> &ShardEngine
+```
+
+Return a reference to the underlying shard engine.
+
+### `shared_engine`
+
+```rust
+pub fn shared_engine(&self) -> Arc<ShardEngine>
+```
+
+Return a shared handle to the underlying shard engine. Useful when integrating with components that need their own `Arc` clone, such as hybrid server mode or custom command dispatch layers.
+
+### `shared_doc_engine`
+
+```rust
+pub fn shared_doc_engine(&self) -> Arc<RwLock<DocEngine>>
+```
+
+Return a shared handle to the embedded document engine. Callers are responsible for acquiring the inner `RwLock` appropriately.
+
+## Hybrid Mode
+
+### `start_listener`
+
+```rust
+#[cfg(feature = "server")]
+pub fn start_listener(
+    &self,
+    addr: &str,
+) -> Result<(JoinHandle<()>, tokio::sync::watch::Sender<bool>), String>
+```
+
+Start a TCP listener on `addr` for hybrid embedded + network mode. Returns a `JoinHandle` for the background server task and a `watch::Sender` that shuts the server down when `true` is sent.
+
+**Note:** the server creates its own shard stores — data is not shared with the embedded `Database` key-value store. This is intended for scenarios where external clients need independent access.
+
+Requires the `server` Cargo feature.
+
+**Example:**
+
+```rust
+use kora_embedded::{Config, Database};
+
+#[tokio::main]
+async fn main() {
+    let db = Database::open(Config::default());
+    let (handle, shutdown_tx) = db.start_listener("127.0.0.1:6379").unwrap();
+    
+    // Use db directly in this process
+    db.set("key", b"value");
+    
+    // External clients can also connect via TCP
+    
+    // Shutdown when done
+    shutdown_tx.send(true).unwrap();
+    handle.await.unwrap();
+}
+```

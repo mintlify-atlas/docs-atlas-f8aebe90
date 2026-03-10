@@ -1,0 +1,493 @@
+---
+title: Security
+description: Security features and best practices for production deployments
+---
+
+Kora includes essential security features for production deployments: password authentication, network binding controls, Unix socket support, and security best practices.
+
+## Authentication
+
+Kora supports password-based authentication compatible with Redis's `AUTH` command.
+
+### Enabling Password Authentication
+
+Set a password via CLI:
+
+```bash
+kora-cli --password "your-secure-password" --port 6379
+```
+
+Or in `kora.toml`:
+
+```toml
+password = "your-secure-password"
+```
+
+### Client Authentication
+
+Clients must authenticate before executing commands:
+
+```bash
+redis-cli -p 6379
+127.0.0.1:6379> GET key
+(error) NOAUTH Authentication required.
+127.0.0.1:6379> AUTH your-secure-password
+OK
+127.0.0.1:6379> GET key
+"value"
+```
+
+Or pass the password on connection:
+
+```bash
+redis-cli -p 6379 -a your-secure-password
+```
+
+### Password Management
+
+**Best Practices:**
+
+1. **Use environment variables** to avoid hardcoding passwords in config files:
+
+```bash
+export KORA_PASSWORD="$(openssl rand -base64 32)"
+kora-cli --password "$KORA_PASSWORD" --port 6379
+```
+
+2. **Use secrets management** for production:
+
+```bash
+# Fetch from AWS Secrets Manager, HashiCorp Vault, etc.
+KORA_PASSWORD=$(aws secretsmanager get-secret-value \
+  --secret-id kora/password \
+  --query SecretString \
+  --output text)
+
+kora-cli --password "$KORA_PASSWORD" --port 6379
+```
+
+3. **Rotate passwords periodically** — Kora requires restart to change passwords (no runtime reload yet).
+
+4. **Use strong passwords** — minimum 32 characters, random alphanumeric:
+
+```bash
+openssl rand -base64 32
+```
+
+### Limitations
+
+- **Single password** — Kora does not support multiple users or ACLs (unlike Redis 6+)
+- **Plaintext comparison** — password is compared in-memory (not hashed)
+- **No rate limiting** — brute-force protection must be implemented at network layer (firewall, fail2ban)
+
+## Network Binding
+
+Control which network interfaces Kora listens on using the `--bind` flag.
+
+### Localhost Only (Default)
+
+```bash
+kora-cli --port 6379  # Binds to 127.0.0.1 (localhost only)
+```
+
+Clients on remote machines **cannot** connect. Suitable for:
+
+- Development on local machine
+- Application and Kora on same host
+- Unix socket alternative (see below)
+
+### All Interfaces (Public Access)
+
+```bash
+kora-cli --bind 0.0.0.0 --port 6379
+```
+
+Kora listens on **all network interfaces** (public IP, private IP, localhost). Clients on any network can connect.
+
+**Warning:** Only use `0.0.0.0` with:
+
+- **Firewall rules** restricting access to trusted IPs
+- **VPC/private network** isolation
+- **Password authentication** enabled
+
+### Specific Interface
+
+```bash
+kora-cli --bind 10.0.1.50 --port 6379
+```
+
+Kora listens only on the specified IP address. Useful for:
+
+- Multi-homed servers (multiple network interfaces)
+- Binding to private network interface only
+
+### Configuration Examples
+
+<CodeGroup>
+```toml Development (localhost)
+bind = "127.0.0.1"
+port = 6379
+```
+
+```toml Production (private network)
+bind = "10.0.1.50"        # Private IP
+port = 6379
+password = "${KORA_PASSWORD}"
+```
+
+```toml Public (with firewall)
+bind = "0.0.0.0"
+port = 6379
+password = "${KORA_PASSWORD}"
+# Requires external firewall rules
+```
+</CodeGroup>
+
+## Unix Domain Sockets
+
+For single-machine deployments, use Unix domain sockets to avoid TCP/IP overhead and restrict access via filesystem permissions.
+
+### Enabling Unix Sockets
+
+```bash
+kora-cli --unix-socket /var/run/kora.sock
+```
+
+Or in `kora.toml`:
+
+```toml
+unix_socket = "/var/run/kora.sock"
+```
+
+### Connecting via Unix Socket
+
+```bash
+redis-cli -s /var/run/kora.sock
+```
+
+Or in client libraries:
+
+<CodeGroup>
+```python Python (redis-py)
+import redis
+r = redis.Redis(unix_socket_path='/var/run/kora.sock')
+r.set('key', 'value')
+```
+
+```javascript Node.js (ioredis)
+const Redis = require('ioredis');
+const redis = new Redis({ path: '/var/run/kora.sock' });
+await redis.set('key', 'value');
+```
+
+```rust Rust (redis-rs)
+let client = redis::Client::open("unix:///var/run/kora.sock")?;
+let mut con = client.get_connection()?;
+redis::cmd("SET").arg("key").arg("value").query(&mut con)?;
+```
+</CodeGroup>
+
+### Filesystem Permissions
+
+Control access to the socket using standard Unix permissions:
+
+```bash
+# Only owner can access
+chmod 600 /var/run/kora.sock
+
+# Owner and group can access
+chmod 660 /var/run/kora.sock
+chown kora:app /var/run/kora.sock
+```
+
+**Advantages:**
+
+- **No network exposure** — socket is not accessible over TCP/IP
+- **Filesystem ACLs** — use standard Unix permissions for access control
+- **Lower latency** — eliminates TCP/IP stack overhead (~20% faster)
+
+**Limitations:**
+
+- **Local connections only** — cannot connect from remote machines
+- **No password authentication** — relies on filesystem permissions
+
+## Data Encryption
+
+Kora **does not** currently support:
+
+- **TLS/SSL encryption** for network traffic
+- **At-rest encryption** for persistence files (WAL, RDB)
+
+### Workarounds for Encryption in Transit
+
+**1. Use a TLS Proxy (Recommended)**
+
+Place a TLS-terminating proxy in front of Kora:
+
+```bash
+# Example: stunnel configuration
+[kora]
+accept = 6380
+connect = 127.0.0.1:6379
+cert = /etc/stunnel/kora.pem
+```
+
+Clients connect to port 6380 with TLS, proxy forwards to Kora on localhost:6379.
+
+**2. VPN/Wireguard**
+
+Run Kora on a private network encrypted with Wireguard or IPsec.
+
+**3. SSH Tunnel**
+
+For ad-hoc connections:
+
+```bash
+ssh -L 6379:localhost:6379 user@kora-server
+redis-cli -p 6379  # Connects through encrypted SSH tunnel
+```
+
+### Workarounds for Encryption at Rest
+
+**1. Encrypted Filesystem**
+
+Store Kora's data directory on an encrypted volume:
+
+```bash
+# Linux LUKS
+cryptsetup luksFormat /dev/sdb1
+cryptsetup open /dev/sdb1 kora-data
+mkfs.ext4 /dev/mapper/kora-data
+mount /dev/mapper/kora-data /var/lib/kora
+```
+
+Or use cloud-provider encrypted volumes (AWS EBS encryption, Azure Disk Encryption).
+
+**2. Application-Level Encryption**
+
+Encrypt values before storing in Kora:
+
+```python
+import redis
+from cryptography.fernet import Fernet
+
+key = Fernet.generate_key()
+cipher = Fernet(key)
+
+r = redis.Redis()
+plaintext = b"sensitive data"
+ciphertext = cipher.encrypt(plaintext)
+
+r.set('key', ciphertext)
+retrieved = cipher.decrypt(r.get('key'))
+```
+
+## Firewall Configuration
+
+Restrict network access to Kora using iptables or cloud security groups.
+
+### iptables Example (Linux)
+
+```bash
+# Allow localhost
+iptables -A INPUT -i lo -j ACCEPT
+
+# Allow specific IPs
+iptables -A INPUT -p tcp --dport 6379 -s 10.0.1.0/24 -j ACCEPT
+
+# Drop all other connections to port 6379
+iptables -A INPUT -p tcp --dport 6379 -j DROP
+```
+
+### AWS Security Group
+
+```json
+{
+  "IpPermissions": [
+    {
+      "IpProtocol": "tcp",
+      "FromPort": 6379,
+      "ToPort": 6379,
+      "IpRanges": [
+        { "CidrIp": "10.0.0.0/16", "Description": "VPC only" }
+      ]
+    }
+  ]
+}
+```
+
+### fail2ban (Brute-Force Protection)
+
+Kora does not have built-in rate limiting for AUTH attempts. Use fail2ban to block repeated authentication failures:
+
+```ini
+# /etc/fail2ban/filter.d/kora.conf
+[Definition]
+failregex = ^.*NOAUTH Authentication required.*from <HOST>$
+ignoreregex =
+
+# /etc/fail2ban/jail.local
+[kora]
+enabled = true
+port = 6379
+filter = kora
+logpath = /var/log/kora.log
+maxretry = 5
+bantime = 3600
+```
+
+## Resource Limits
+
+Limit Kora's resource consumption to prevent denial-of-service:
+
+### Memory Limits (systemd)
+
+```ini
+# /etc/systemd/system/kora.service
+[Service]
+MemoryMax=8G
+MemoryHigh=7G
+```
+
+Kills Kora if it exceeds 8GB memory.
+
+### File Descriptor Limits
+
+```bash
+# /etc/security/limits.conf
+kora soft nofile 65536
+kora hard nofile 65536
+```
+
+Or in systemd:
+
+```ini
+[Service]
+LimitNOFILE=65536
+```
+
+### CPU Limits (cgroups)
+
+```bash
+# Limit Kora to 50% of CPU
+systemd-run --scope -p CPUQuota=50% kora-cli --port 6379
+```
+
+## Security Best Practices
+
+### Deployment Checklist
+
+- ✅ **Enable password authentication** for all production deployments
+- ✅ **Bind to private IP** or use Unix sockets (not `0.0.0.0`)
+- ✅ **Use firewall rules** to restrict access to trusted IPs
+- ✅ **Store passwords in secrets manager**, not config files
+- ✅ **Enable TLS** via stunnel or reverse proxy if encrypting traffic
+- ✅ **Use encrypted volumes** for data directory
+- ✅ **Set resource limits** (memory, file descriptors, CPU)
+- ✅ **Monitor authentication failures** and use fail2ban
+- ✅ **Run as non-root user** with minimal privileges
+- ✅ **Keep Kora updated** to the latest version
+
+### Network Architecture
+
+**Recommended topology:**
+
+```
+┌──────────────┐
+│  Public Web  │
+└──────┬───────┘
+       │ HTTPS
+       v
+┌──────────────┐
+│ App Server   │ (private VPC)
+│ (10.0.1.10)  │
+└──────┬───────┘
+       │ Kora protocol
+       v
+┌──────────────┐
+│ Kora Server  │ (private VPC, no public IP)
+│ (10.0.1.50)  │
+│ bind=10.0.1.50
+│ password=***
+└──────────────┘
+```
+
+**Isolation:**
+
+- Kora has **no public IP**
+- Only app servers can connect (VPC isolation)
+- Password authentication enabled
+- TLS termination at load balancer (app → Kora unencrypted on private network)
+
+### Running as Non-Root
+
+Create a dedicated user:
+
+```bash
+useradd --system --no-create-home --shell /bin/false kora
+
+# Set ownership of data directory
+mkdir -p /var/lib/kora
+chown -R kora:kora /var/lib/kora
+
+# Run as kora user
+sudo -u kora kora-cli --data-dir /var/lib/kora --port 6379
+```
+
+Or with systemd:
+
+```ini
+[Service]
+User=kora
+Group=kora
+ExecStart=/usr/local/bin/kora-cli --config /etc/kora/kora.toml
+```
+
+### Logging and Auditing
+
+Enable detailed logging for security auditing:
+
+```bash
+RUST_LOG=kora_server=info kora-cli --port 6379 2>&1 | tee /var/log/kora.log
+```
+
+Log files include:
+
+- Connection events (client IP, port)
+- Authentication attempts (success/failure)
+- Command execution (if trace-level logging enabled)
+
+Rotate logs to prevent disk exhaustion:
+
+```bash
+# /etc/logrotate.d/kora
+/var/log/kora.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
+```
+
+## Vulnerability Disclosure
+
+Kora is open-source software. Security vulnerabilities should be reported via:
+
+- **GitHub Issues** (for non-critical issues)
+- **Private disclosure** to maintainers (for critical vulnerabilities)
+
+See the [repository](https://github.com/Augani/Kora) for contact information.
+
+## Security Roadmap
+
+Planned security features (not yet implemented):
+
+- **TLS/SSL support** — native encryption for network traffic
+- **ACLs** — per-user command restrictions (Redis 6+ style)
+- **Rate limiting** — built-in protection against brute-force attacks
+- **At-rest encryption** — encrypted RDB/WAL files
+- **Audit logging** — detailed command-level audit trail
+
+Check the [GitHub roadmap](https://github.com/Augani/Kora/issues) for status updates.

@@ -1,0 +1,164 @@
+---
+title: Introduction
+description: A multi-threaded, embeddable, memory-safe cache engine written in Rust
+---
+
+## What is Kora?
+
+Kora is a **multi-threaded, embeddable, memory-safe cache engine** built on a shared-nothing, shard-affinity threading architecture inspired by Seastar and ScyllaDB. Each worker thread owns both its data and its connections' I/O — no locks on the data path, linear scaling with cores.
+
+It speaks RESP2 on the wire, so existing Redis clients work out of the box. But Kora goes beyond caching: it includes a JSON document database with secondary indexes and WHERE queries, HNSW vector search, change data capture, and built-in observability. The entire engine compiles as an embeddable library for in-process use with zero network overhead.
+
+<Note>
+The name **Kora** comes from Sanskrit (core, essence) and Twi (kora), echoing "core" in English.
+</Note>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multi-threaded Shard-Affinity I/O" icon="network-wired">
+    Each worker owns data + connections, scales linearly with cores
+  </Card>
+  <Card title="JSON Document Database" icon="database">
+    Secondary indexes (hash, sorted, array, unique), WHERE queries with IN/EXISTS/NOT/ORDER BY, field projection
+  </Card>
+  <Card title="HNSW Vector Search" icon="chart-network">
+    Cosine, L2, and inner product distance metrics
+  </Card>
+  <Card title="Change Data Capture" icon="stream">
+    Per-shard ring buffers with cursor-based subscriptions and gap detection
+  </Card>
+  <Card title="Built-in Observability" icon="chart-line">
+    Count-Min Sketch hot-key detection, per-command latency histograms, atomic shard stats
+  </Card>
+  <Card title="WAL + RDB Persistence" icon="hard-drive">
+    CRC-verified write-ahead log, atomic snapshots, LZ4-compressed cold-tier storage
+  </Card>
+  <Card title="Embeddable Library Mode" icon="cube">
+    Same multi-threaded engine, no network required
+  </Card>
+  <Card title="RESP2 Wire Protocol" icon="plug">
+    Works with redis-cli, Jedis, ioredis, redis-rs, and any Redis client
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+Kora uses a **shared-nothing, shard-affinity** threading model:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                      Client Layer                        │
+│            RESP2 Protocol  /  Embedded API               │
+└──────────────┬──────────────────────┬────────────────────┘
+               │ TCP/Unix socket      │ fn call (in-process)
+               v                      v
+┌──────────────────────────────────────────────────────────┐
+│                    Router / Dispatcher                    │
+│            hash(key) % N -> worker thread                │
+└──────┬────────┬────────┬────────┬────────┬───────────────┘
+       v        v        v        v        v
+   ┌────────┬────────┬────────┬────────┬────────┐
+   │Worker 0│Worker 1│Worker 2│Worker 3│Worker N│
+   │        │        │        │        │        │
+   │ Shard  │ Shard  │ Shard  │ Shard  │ Shard  │
+   │ Store  │ Store  │ Store  │ Store  │ Store  │
+   │        │        │        │        │        │
+   │ Vector │ Vector │ Vector │ Vector │ Vector │
+   │ Index  │ Index  │ Index  │ Index  │ Index  │
+   │        │        │        │        │        │
+   │ CDC    │ CDC    │ CDC    │ CDC    │ CDC    │
+   │ Ring   │ Ring   │ Ring   │ Ring   │ Ring   │
+   └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┘
+       │        │        │        │        │
+       v        v        v        v        v
+┌──────────────────────────────────────────────────────────┐
+│                    Persistence Layer                      │
+│           WAL + RDB Snapshots + LZ4 Cold Tier            │
+└──────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+Each shard worker runs its own `current_thread` Tokio runtime. Local-key commands execute inline with zero channel hops. Foreign-key commands take a single async hop via `tokio::sync::mpsc` + `oneshot`. Data structures use `Rc<RefCell<>>` instead of `Arc<Mutex<>>` — no lock contention.
+
+## Performance
+
+Benchmarked on AWS m5.xlarge (4 vCPU, 16GB RAM) with memtier_benchmark, 200 clients, 256-byte values.
+
+### Throughput (ops/sec)
+
+| Workload        | Redis 8    | Dragonfly 1.37 | Kora       | vs Redis     | vs Dragonfly    |
+|-----------------|------------|----------------|------------|--------------|---------------|
+| SET-only        | 138,239    | 236,885        | 229,535    | **+66.0%**   | -3.1%           |
+| GET-only        | 144,240    | 241,305        | 239,230    | **+65.9%**   | -0.9%           |
+| Mixed 1:1       | 139,014    | 232,507        | 233,377    | **+67.9%**   | **+0.4%**       |
+| Pipeline x16    | 510,705    | 389,286        | 769,374    | **+50.7%**   | **+97.7%**      |
+
+### p50 Latency (ms)
+
+| Workload        | Redis 8 | Dragonfly | Kora      |
+|-----------------|---------|-----------|-----------||
+| SET-only        | 1.415   | 0.847     | **0.831** |
+| GET-only        | 1.359   | 0.839     | **0.839** |
+| Mixed 1:1       | 1.415   | 0.871     | **0.847** |
+| Pipeline x16    | 6.303   | 8.191     | **4.063** |
+
+## Use Cases
+
+### Cache Engine
+- Drop-in replacement for Redis with better multi-core performance
+- RESP2 protocol compatibility means no client changes required
+- Linear scaling with CPU cores
+
+### Embedded Database
+- In-process cache with sub-microsecond dispatch latency
+- No network overhead
+- Full type safety with Rust API
+
+### Document Store
+- JSON-native storage with secondary indexes
+- WHERE clause queries with complex predicates
+- Field projection and pagination
+
+### Vector Search
+- HNSW approximate nearest neighbor search
+- Multiple distance metrics (cosine, L2, inner product)
+- Integrated with key-value store
+
+### Change Data Capture
+- Per-shard ring buffers for streaming changes
+- Cursor-based subscriptions with gap detection
+- Glob-pattern filtering
+
+## Crate Structure
+
+```
+kora/
+├── kora-core/           Core data structures, shard engine, memory management
+├── kora-protocol/       RESP2 streaming parser and response serializer
+├── kora-server/         TCP/Unix server, shard-affinity I/O engine
+├── kora-embedded/       Library mode — direct API, no network
+├── kora-storage/        WAL, RDB snapshots, LZ4-compressed cold-tier backend
+├── kora-doc/            JSON document database, secondary indexes, WHERE queries
+├── kora-vector/         HNSW approximate nearest neighbor index
+├── kora-cdc/            Change data capture with per-shard ring buffers
+├── kora-pubsub/         Publish/subscribe messaging with pattern support
+├── kora-observability/  Hot-key detection, per-command stats, latency histograms
+└── kora-cli/            CLI binary with TOML config support
+```
+
+<Note>
+`kora-core` has zero internal workspace dependencies. The dependency graph is strictly acyclic.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get Kora running in 5 minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed build and configuration instructions
+  </Card>
+</CardGroup>

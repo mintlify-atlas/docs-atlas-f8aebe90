@@ -1,0 +1,671 @@
+---
+title: Document Commands
+description: JSON document database commands in Kora
+---
+
+Kora provides a built-in JSON document database with secondary indexes, query support, and field-level operations. Documents are stored using a space-efficient binary format.
+
+## DOC.CREATE
+
+Create a new document collection.
+
+**Syntax**
+```
+DOC.CREATE collection [COMPRESSION profile]
+```
+
+<ParamField path="collection" type="string" required>
+  The name of the collection to create
+</ParamField>
+
+<ParamField path="COMPRESSION" type="string">
+  Optional compression profile name (e.g., "lz4")
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the collection was created successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.CREATE users
+OK
+redis-cli> DOC.CREATE products COMPRESSION lz4
+OK
+```
+
+**Time complexity:** O(1)
+
+---
+
+## DOC.DROP
+
+Drop a document collection and all its data.
+
+**Syntax**
+```
+DOC.DROP collection
+```
+
+<ParamField path="collection" type="string" required>
+  The name of the collection to drop
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the collection was dropped successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.DROP users
+OK
+```
+
+**Time complexity:** O(N) where N is the number of documents in the collection
+
+---
+
+## DOC.SET
+
+Insert or replace a document in a collection.
+
+**Syntax**
+```
+DOC.SET collection doc_id json
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="doc_id" type="string" required>
+  The document ID (unique within the collection)
+</ParamField>
+
+<ParamField path="json" type="string" required>
+  The JSON document payload
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the document was set successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.SET users user:1 '{"name":"Alice","age":30,"city":"NYC"}'
+OK
+redis-cli> DOC.SET users user:2 '{"name":"Bob","age":25,"city":"LA"}'
+OK
+```
+
+**Time complexity:** O(N) where N is the size of the JSON document
+
+---
+
+## DOC.GET
+
+Retrieve a document from a collection.
+
+**Syntax**
+```
+DOC.GET collection doc_id [FIELDS path ...]
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="doc_id" type="string" required>
+  The document ID
+</ParamField>
+
+<ParamField path="FIELDS" type="string[]">
+  Optional field paths to project (dotted notation)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="document" type="string | null">
+  The JSON document, or null if not found
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.GET users user:1
+"{\"name\":\"Alice\",\"age\":30,\"city\":\"NYC\"}"
+redis-cli> DOC.GET users user:1 FIELDS name city
+"{\"name\":\"Alice\",\"city\":\"NYC\"}"
+redis-cli> DOC.GET users user:99
+(nil)
+```
+
+**Time complexity:** O(1) for lookup, O(N) for field projection where N is document size
+
+---
+
+## DOC.MSET
+
+Batch insert or replace multiple documents.
+
+**Syntax**
+```
+DOC.MSET collection doc_id json [doc_id json ...]
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="doc_id" type="string" required>
+  A document ID
+</ParamField>
+
+<ParamField path="json" type="string" required>
+  The JSON document for the corresponding ID
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if all documents were set successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.MSET users user:1 '{"name":"Alice"}' user:2 '{"name":"Bob"}'
+OK
+```
+
+**Time complexity:** O(N*M) where N is the number of documents and M is average document size
+
+---
+
+## DOC.MGET
+
+Batch retrieve multiple documents.
+
+**Syntax**
+```
+DOC.MGET collection doc_id [doc_id ...]
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="doc_id" type="string" required>
+  One or more document IDs to retrieve
+</ParamField>
+
+**Return value**
+
+<ResponseField name="documents" type="array">
+  Array of JSON documents (null for missing documents)
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.MGET users user:1 user:2 user:99
+1) "{\"name\":\"Alice\",\"age\":30}"
+2) "{\"name\":\"Bob\",\"age\":25}"
+3) (nil)
+```
+
+**Time complexity:** O(N) where N is the number of documents
+
+---
+
+## DOC.UPDATE
+
+Apply field-level mutations to a document.
+
+**Syntax**
+```
+DOC.UPDATE collection doc_id <mutation...>
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="doc_id" type="string" required>
+  The document ID
+</ParamField>
+
+<ParamField path="mutation" type="operation" required>
+  One or more mutations: SET path value | DEL path | INCR path delta | PUSH path value | PULL path value
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the update was successful
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.SET users user:1 '{"name":"Alice","age":30,"tags":["admin"]}'
+OK
+redis-cli> DOC.UPDATE users user:1 SET city "NYC" INCR age 1
+OK
+redis-cli> DOC.UPDATE users user:1 PUSH tags "verified" DEL temp
+OK
+redis-cli> DOC.GET users user:1
+"{\"name\":\"Alice\",\"age\":31,\"city\":\"NYC\",\"tags\":[\"admin\",\"verified\"]}"
+```
+
+**Time complexity:** O(M + N) where M is the number of mutations and N is document size
+
+**Mutation operations:**
+- **SET path value** - Set a field to a JSON value
+- **DEL path** - Delete a field
+- **INCR path delta** - Increment a numeric field
+- **PUSH path value** - Append to an array field
+- **PULL path value** - Remove matching values from an array field
+
+---
+
+## DOC.DEL
+
+Delete a document from a collection.
+
+**Syntax**
+```
+DOC.DEL collection doc_id
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="doc_id" type="string" required>
+  The document ID to delete
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the document was deleted, 0 if it did not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.DEL users user:1
+(integer) 1
+redis-cli> DOC.DEL users user:99
+(integer) 0
+```
+
+**Time complexity:** O(1)
+
+---
+
+## DOC.EXISTS
+
+Check if a document exists in a collection.
+
+**Syntax**
+```
+DOC.EXISTS collection doc_id
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="doc_id" type="string" required>
+  The document ID to check
+</ParamField>
+
+**Return value**
+
+<ResponseField name="exists" type="integer">
+  1 if the document exists, 0 otherwise
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.EXISTS users user:1
+(integer) 1
+redis-cli> DOC.EXISTS users user:99
+(integer) 0
+```
+
+**Time complexity:** O(1)
+
+---
+
+## DOC.CREATEINDEX
+
+Create a secondary index on a field.
+
+**Syntax**
+```
+DOC.CREATEINDEX collection field type
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  The field path (dotted notation)
+</ParamField>
+
+<ParamField path="type" type="enum" required>
+  Index type: hash, sorted, array, or unique
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the index was created successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.CREATEINDEX users email unique
+OK
+redis-cli> DOC.CREATEINDEX users age sorted
+OK
+redis-cli> DOC.CREATEINDEX users tags array
+OK
+```
+
+**Time complexity:** O(N) where N is the number of documents (indexes existing documents)
+
+**Index types:**
+- **hash** - Equality queries (field = value)
+- **sorted** - Range queries (field > value, field < value)
+- **array** - Array contains queries
+- **unique** - Hash index with uniqueness constraint
+
+---
+
+## DOC.DROPINDEX
+
+Drop a secondary index.
+
+**Syntax**
+```
+DOC.DROPINDEX collection field
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  The field path of the index to drop
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the index was dropped successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.DROPINDEX users age
+OK
+```
+
+**Time complexity:** O(1)
+
+---
+
+## DOC.INDEXES
+
+List all indexes on a collection.
+
+**Syntax**
+```
+DOC.INDEXES collection
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+**Return value**
+
+<ResponseField name="indexes" type="array">
+  Array of index definitions (field, type pairs)
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.INDEXES users
+1) "email"
+2) "unique"
+3) "age"
+4) "sorted"
+```
+
+**Time complexity:** O(N) where N is the number of indexes
+
+---
+
+## DOC.FIND
+
+Query documents using a WHERE expression.
+
+**Syntax**
+```
+DOC.FIND collection WHERE expr [ORDER BY field [ASC|DESC]] [PROJECT f1 f2 ...] [LIMIT n] [OFFSET n]
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="WHERE" type="expression" required>
+  Filter expression (e.g., "age > 25 AND city = 'NYC'")
+</ParamField>
+
+<ParamField path="ORDER BY" type="string">
+  Field to sort results by
+</ParamField>
+
+<ParamField path="ASC|DESC" type="enum">
+  Sort order (default: ASC)
+</ParamField>
+
+<ParamField path="PROJECT" type="string[]">
+  Fields to include in results
+</ParamField>
+
+<ParamField path="LIMIT" type="integer">
+  Maximum number of results to return
+</ParamField>
+
+<ParamField path="OFFSET" type="integer">
+  Number of results to skip
+</ParamField>
+
+**Return value**
+
+<ResponseField name="documents" type="array">
+  Array of matching JSON documents
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.FIND users WHERE "age > 25"
+1) "{\"name\":\"Alice\",\"age\":30,\"city\":\"NYC\"}"
+2) "{\"name\":\"Charlie\",\"age\":28,\"city\":\"SF\"}"
+
+redis-cli> DOC.FIND users WHERE "city = 'NYC' AND age >= 30" ORDER BY age DESC LIMIT 10
+1) "{\"name\":\"Alice\",\"age\":30,\"city\":\"NYC\"}"
+
+redis-cli> DOC.FIND users WHERE "age > 20" PROJECT name age
+1) "{\"name\":\"Alice\",\"age\":30}"
+2) "{\"name\":\"Bob\",\"age\":25}"
+```
+
+**Time complexity:** O(N) for full scan, O(log N + M) for indexed queries where M is result count
+
+**WHERE expression syntax:**
+- Comparisons: `=`, `!=`, `>`, `>=`, `<`, `<=`
+- Logical: `AND`, `OR`, `NOT`
+- String literals: `'value'` or `"value"`
+- Numeric literals: `123`, `45.67`
+- Boolean literals: `true`, `false`
+- Null: `null`
+
+---
+
+## DOC.COUNT
+
+Count documents matching a WHERE expression.
+
+**Syntax**
+```
+DOC.COUNT collection WHERE expr
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+<ParamField path="WHERE" type="expression" required>
+  Filter expression
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of matching documents
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.COUNT users WHERE "age > 25"
+(integer) 42
+redis-cli> DOC.COUNT users WHERE "city = 'NYC'"
+(integer) 15
+```
+
+**Time complexity:** O(N) for full scan, O(log N + M) for indexed queries where M is match count
+
+---
+
+## DOC.INFO
+
+Get metadata about a collection.
+
+**Syntax**
+```
+DOC.INFO collection
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+**Return value**
+
+<ResponseField name="info" type="array">
+  Array of key-value pairs with collection metadata
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.INFO users
+1) "document_count"
+2) (integer) 100
+3) "indexes"
+4) (integer) 2
+5) "compression"
+6) "lz4"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## DOC.DICTINFO
+
+Get dictionary statistics for a collection.
+
+**Syntax**
+```
+DOC.DICTINFO collection
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+**Return value**
+
+<ResponseField name="stats" type="array">
+  Dictionary compression statistics
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.DICTINFO users
+1) "unique_keys"
+2) (integer) 15
+3) "compression_ratio"
+4) "2.4"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## DOC.STORAGE
+
+Get storage statistics for a collection.
+
+**Syntax**
+```
+DOC.STORAGE collection
+```
+
+<ParamField path="collection" type="string" required>
+  The collection name
+</ParamField>
+
+**Return value**
+
+<ResponseField name="stats" type="array">
+  Storage size and efficiency metrics
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> DOC.STORAGE users
+1) "bytes_used"
+2) (integer) 524288
+3) "documents"
+4) (integer) 1000
+```
+
+**Time complexity:** O(1)

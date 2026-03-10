@@ -1,0 +1,563 @@
+---
+title: Hash Commands
+description: Commands for manipulating hash data structures in Kora
+---
+
+Hashes are maps between string fields and string values. Kora supports all standard Redis hash operations.
+
+## HSET
+
+Set one or more field-value pairs in a hash.
+
+**Syntax**
+```
+HSET key field value [field value ...]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  The field name
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to set
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of fields that were added (fields that already existed and were updated are not counted)
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "Hello"
+(integer) 1
+redis-cli> HSET myhash field2 "World" field3 "!"
+(integer) 2
+redis-cli> HGET myhash field1
+"Hello"
+```
+
+**Time complexity:** O(N) where N is the number of fields being set
+
+---
+
+## HGET
+
+Get the value of a hash field.
+
+**Syntax**
+```
+HGET key field
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  The field name
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="string | null">
+  The value associated with the field, or null if the field does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "foo"
+(integer) 1
+redis-cli> HGET myhash field1
+"foo"
+redis-cli> HGET myhash field2
+(nil)
+```
+
+**Time complexity:** O(1)
+
+---
+
+## HDEL
+
+Delete one or more hash fields.
+
+**Syntax**
+```
+HDEL key field [field ...]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  One or more field names to delete
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of fields that were removed
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "foo" field2 "bar"
+(integer) 2
+redis-cli> HDEL myhash field1
+(integer) 1
+redis-cli> HDEL myhash field2 field3
+(integer) 1
+```
+
+**Time complexity:** O(N) where N is the number of fields to delete
+
+---
+
+## HGETALL
+
+Get all fields and values in a hash.
+
+**Syntax**
+```
+HGETALL key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+**Return value**
+
+<ResponseField name="fields" type="array">
+  Array of field-value pairs (field1, value1, field2, value2, ...)
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "Hello" field2 "World"
+(integer) 2
+redis-cli> HGETALL myhash
+1) "field1"
+2) "Hello"
+3) "field2"
+4) "World"
+```
+
+**Time complexity:** O(N) where N is the size of the hash
+
+---
+
+## HLEN
+
+Get the number of fields in a hash.
+
+**Syntax**
+```
+HLEN key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of fields in the hash, or 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "Hello" field2 "World"
+(integer) 2
+redis-cli> HLEN myhash
+(integer) 2
+```
+
+**Time complexity:** O(1)
+
+---
+
+## HEXISTS
+
+Determine if a hash field exists.
+
+**Syntax**
+```
+HEXISTS key field
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  The field name
+</ParamField>
+
+**Return value**
+
+<ResponseField name="exists" type="integer">
+  1 if the field exists, 0 otherwise
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "foo"
+(integer) 1
+redis-cli> HEXISTS myhash field1
+(integer) 1
+redis-cli> HEXISTS myhash field2
+(integer) 0
+```
+
+**Time complexity:** O(1)
+
+---
+
+## HINCRBY
+
+Increment the integer value of a hash field by the given number.
+
+**Syntax**
+```
+HINCRBY key field delta
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  The field name
+</ParamField>
+
+<ParamField path="delta" type="integer" required>
+  The increment amount
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="integer">
+  The value at field after the increment
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field 5
+(integer) 1
+redis-cli> HINCRBY myhash field 1
+(integer) 6
+redis-cli> HINCRBY myhash field -1
+(integer) 5
+redis-cli> HINCRBY myhash field -10
+(integer) -5
+```
+
+**Time complexity:** O(1)
+
+---
+
+## HINCRBYFLOAT
+
+Increment the float value of a hash field by the given amount.
+
+**Syntax**
+```
+HINCRBYFLOAT key field delta
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  The field name
+</ParamField>
+
+<ParamField path="delta" type="float" required>
+  The increment amount
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="float">
+  The value at field after the increment
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field 10.50
+(integer) 1
+redis-cli> HINCRBYFLOAT myhash field 0.1
+"10.6"
+redis-cli> HINCRBYFLOAT myhash field -5
+"5.6"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## HMGET
+
+Get the values of multiple hash fields.
+
+**Syntax**
+```
+HMGET key field [field ...]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  One or more field names
+</ParamField>
+
+**Return value**
+
+<ResponseField name="values" type="array">
+  Array of values associated with the given fields, in the same order. For non-existing fields, null is returned
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "Hello" field2 "World"
+(integer) 2
+redis-cli> HMGET myhash field1 field2 nofield
+1) "Hello"
+2) "World"
+3) (nil)
+```
+
+**Time complexity:** O(N) where N is the number of fields being requested
+
+---
+
+## HKEYS
+
+Get all field names in a hash.
+
+**Syntax**
+```
+HKEYS key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+**Return value**
+
+<ResponseField name="fields" type="array">
+  Array of field names in the hash
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "Hello" field2 "World"
+(integer) 2
+redis-cli> HKEYS myhash
+1) "field1"
+2) "field2"
+```
+
+**Time complexity:** O(N) where N is the size of the hash
+
+---
+
+## HVALS
+
+Get all values in a hash.
+
+**Syntax**
+```
+HVALS key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+**Return value**
+
+<ResponseField name="values" type="array">
+  Array of values in the hash
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash field1 "Hello" field2 "World"
+(integer) 2
+redis-cli> HVALS myhash
+1) "Hello"
+2) "World"
+```
+
+**Time complexity:** O(N) where N is the size of the hash
+
+---
+
+## HSETNX
+
+Set the value of a hash field, only if the field does not exist.
+
+**Syntax**
+```
+HSETNX key field value
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  The field name
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to set
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the field was set, 0 if the field already exists
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSETNX myhash field "Hello"
+(integer) 1
+redis-cli> HSETNX myhash field "World"
+(integer) 0
+redis-cli> HGET myhash field
+"Hello"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## HRANDFIELD
+
+Get one or random fields from a hash.
+
+**Syntax**
+```
+HRANDFIELD key [count [WITHVALUES]]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="count" type="integer">
+  Number of fields to return (negative values allow duplicates)
+</ParamField>
+
+<ParamField path="WITHVALUES" type="flag">
+  Include values with the fields
+</ParamField>
+
+**Return value**
+
+<ResponseField name="fields" type="string | array">
+  Without count: a single field name. With count: array of field names. With WITHVALUES: array of field-value pairs
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash a 1 b 2 c 3 d 4
+(integer) 4
+redis-cli> HRANDFIELD myhash
+"b"
+redis-cli> HRANDFIELD myhash 2
+1) "c"
+2) "a"
+redis-cli> HRANDFIELD myhash 2 WITHVALUES
+1) "d"
+2) "4"
+3) "b"
+4) "2"
+```
+
+**Time complexity:** O(N) where N is the number of fields returned
+
+---
+
+## HSCAN
+
+Incrementally iterate hash fields and values.
+
+**Syntax**
+```
+HSCAN key cursor [MATCH pattern] [COUNT count]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the hash
+</ParamField>
+
+<ParamField path="cursor" type="integer" required>
+  The cursor position (use 0 to start)
+</ParamField>
+
+<ParamField path="MATCH" type="string">
+  Glob pattern to filter fields
+</ParamField>
+
+<ParamField path="COUNT" type="integer">
+  Hint for how many fields to return
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="array">
+  Array with two elements: [0] next cursor, [1] array of field-value pairs
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> HSET myhash f1 v1 f2 v2 f3 v3
+(integer) 3
+redis-cli> HSCAN myhash 0 MATCH f* COUNT 10
+1) "0"
+2) 1) "f1"
+   2) "v1"
+   3) "f2"
+   4) "v2"
+   5) "f3"
+   6) "v3"
+```
+
+**Time complexity:** O(1) for every call, O(N) for a complete iteration
+
+---
+
+## Redis Compatibility
+
+Kora implements all standard Redis hash commands with identical semantics.

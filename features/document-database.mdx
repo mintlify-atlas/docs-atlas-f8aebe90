@@ -1,0 +1,390 @@
+---
+title: Document Database
+description: JSON document storage with secondary indexes and SQL-like WHERE queries
+---
+
+Kora's document layer transforms the cache engine into a JSON-native document database. Documents are stored in a compact binary format and queried through a WHERE expression parser with automatic index optimization.
+
+## Overview
+
+The document engine provides:
+
+- **JSON document storage** with field-level projection
+- **Secondary indexes** (hash, sorted, array, unique)
+- **WHERE clause queries** with automatic index selection
+- **Dictionary encoding** for low-cardinality string fields
+- **Packed binary format** for memory-efficient storage
+
+## Collections
+
+Documents are organized into collections, similar to tables in SQL or collections in MongoDB.
+
+### Creating Collections
+
+```bash
+# Create a collection
+DOC.CREATE users
+
+# Create with compression profile
+DOC.CREATE products COMPRESSION high
+
+# Get collection info
+DOC.INFO users
+```
+
+### Collection Management
+
+```bash
+# Drop a collection
+DOC.DROP users
+
+# Get storage statistics
+DOC.STORAGE users
+
+# Get dictionary info
+DOC.DICTINFO users
+```
+
+## Document Operations
+
+### Insert and Update
+
+```bash
+# Insert a JSON document
+DOC.SET users alice '{"name":"Alice","age":30,"city":"NYC"}'
+
+# Update returns 1 if created, 0 if updated
+# => 1
+
+# Replace with new document
+DOC.SET users alice '{"name":"Alice Smith","age":31,"city":"LA"}'
+# => 0
+```
+
+### Batch Operations
+
+```bash
+# Insert multiple documents
+DOC.MSET users \
+  alice '{"name":"Alice","age":30}' \
+  bob '{"name":"Bob","age":25}' \
+  charlie '{"name":"Charlie","age":35}'
+```
+
+### Retrieve Documents
+
+```bash
+# Get full document
+DOC.GET users alice
+# => {"name":"Alice","age":30,"city":"NYC"}
+
+# Get with field projection
+DOC.GET users alice FIELDS name city
+# => {"name":"Alice","city":"NYC"}
+
+# Batch get
+DOC.MGET users alice bob charlie
+```
+
+### Field-Level Updates
+
+From `kora-doc/src/engine.rs:67-103`:
+
+```rust
+pub enum DocMutation {
+    /// Set a field path to a JSON value
+    Set { path: String, value: Value },
+    /// Delete one field path
+    Del { path: String },
+    /// Increment a numeric field by delta
+    Incr { path: String, delta: f64 },
+    /// Append value to an array field
+    Push { path: String, value: Value },
+    /// Remove matching items from array
+    Pull { path: String, value: Value },
+}
+```
+
+```bash
+# Update specific fields
+DOC.UPDATE users alice \
+  SET age 31 \
+  SET city "Boston" \
+  INCR login_count 1 \
+  PUSH tags "premium"
+
+# Delete a field
+DOC.UPDATE users alice DEL temporary_flag
+
+# Array operations
+DOC.UPDATE users alice PUSH interests "rust"
+DOC.UPDATE users alice PULL interests "java"
+```
+
+### Delete Documents
+
+```bash
+# Delete by ID
+DOC.DEL users alice
+# => 1
+
+# Check existence
+DOC.EXISTS users alice
+# => 0
+```
+
+## Secondary Indexes
+
+Indexes dramatically speed up queries by allowing direct lookups instead of full collection scans.
+
+### Index Types
+
+From `kora-doc/src/index.rs:1-27`:
+
+| Type | Structure | Use Case |
+|------|-----------|----------|
+| **Hash** | `HashMap<u32, Vec<DocId>>` | Equality lookups (`field = value`) |
+| **Sorted** | `BTreeMap<f64, Vec<DocId>>` | Numeric range queries (`field >= N`) |
+| **Array** | `HashMap<u32, Vec<DocId>>` | Array membership (`field CONTAINS value`) |
+| **Unique** | `HashMap<u32, Vec<DocId>>` | Unique constraint enforcement |
+
+### Creating Indexes
+
+```bash
+# Hash index for equality lookups
+DOC.CREATEINDEX users email hash
+
+# Sorted index for range queries
+DOC.CREATEINDEX users age sorted
+
+# Array index for array fields
+DOC.CREATEINDEX users tags array
+
+# Unique constraint
+DOC.CREATEINDEX users username unique
+```
+
+<Warning>
+  Unique indexes are checked before writes. If a duplicate value exists, the write fails with a `UniqueViolation` error.
+</Warning>
+
+### Index Management
+
+```bash
+# List all indexes
+DOC.INDEXES users
+# => [["email", "hash"], ["age", "sorted"], ["tags", "array"]]
+
+# Drop an index
+DOC.DROPINDEX users email
+```
+
+## Queries
+
+### WHERE Clause Syntax
+
+The WHERE expression parser supports:
+
+- **Operators**: `=`, `!=`, `>`, `>=`, `<`, `<=`, `CONTAINS`, `IN`, `EXISTS`
+- **Logic**: `AND`, `OR`, `NOT`
+- **Types**: strings (quoted), numbers, booleans (`true`/`false`), `null`
+
+### Basic Queries
+
+```bash
+# Equality
+DOC.FIND users WHERE "city = 'NYC'"
+
+# Comparison
+DOC.FIND users WHERE "age >= 30"
+
+# String matching
+DOC.FIND users WHERE "name = 'Alice'"
+
+# Boolean
+DOC.FIND users WHERE "active = true"
+```
+
+### Complex Queries
+
+```bash
+# AND condition
+DOC.FIND users WHERE "age >= 25 AND city = 'NYC'"
+
+# OR condition
+DOC.FIND users WHERE "city = 'NYC' OR city = 'LA'"
+
+# NOT condition
+DOC.FIND users WHERE "NOT (age < 18)"
+
+# Nested logic
+DOC.FIND users WHERE "(age >= 30 AND city = 'NYC') OR status = 'premium'"
+```
+
+### Array Queries
+
+```bash
+# Check if array contains value
+DOC.FIND users WHERE "tags CONTAINS 'rust'"
+
+# Multiple conditions
+DOC.FIND users WHERE "tags CONTAINS 'rust' AND age >= 25"
+```
+
+### Field Existence
+
+```bash
+# Check if field exists
+DOC.FIND users WHERE "EXISTS email"
+
+# Check if field doesn't exist
+DOC.FIND users WHERE "NOT EXISTS deleted_at"
+```
+
+### IN Operator
+
+```bash
+# Match multiple values
+DOC.FIND users WHERE "city IN ('NYC', 'LA', 'SF')"
+
+# Numeric IN
+DOC.FIND products WHERE "category_id IN (1, 2, 3)"
+```
+
+### Query Modifiers
+
+```bash
+# Field projection
+DOC.FIND users WHERE "age >= 30" PROJECT name email
+
+# Limit results
+DOC.FIND users WHERE "city = 'NYC'" LIMIT 10
+
+# Offset and limit (pagination)
+DOC.FIND users WHERE "active = true" LIMIT 20 OFFSET 40
+
+# Order by field
+DOC.FIND users WHERE "age >= 18" ORDER BY age ASC
+DOC.FIND users WHERE "city = 'NYC'" ORDER BY created_at DESC
+
+# Combined
+DOC.FIND users \
+  WHERE "age >= 25" \
+  ORDER BY name ASC \
+  PROJECT name email \
+  LIMIT 10 OFFSET 0
+```
+
+### Count Documents
+
+```bash
+# Count matching documents
+DOC.COUNT users WHERE "age >= 30"
+# => 42
+
+DOC.COUNT products WHERE "in_stock = true AND price < 100"
+# => 156
+```
+
+## Query Optimization
+
+From `kora-doc/src/engine.rs:913-1033`, the engine automatically selects the best index for each query:
+
+### Index Selection
+
+```rust
+match (expr, index_type, field_id) {
+    // Hash index for equality
+    (Expr::Eq(_, value), Some(IndexType::Hash), Some(fid)) => {
+        // Direct hash lookup
+    }
+    // Sorted index for ranges
+    (Expr::Gte(_, n), Some(IndexType::Sorted), Some(fid)) => {
+        // BTree range query
+    }
+    // Array index for CONTAINS
+    (Expr::Contains(_, value), Some(IndexType::Array), Some(fid)) => {
+        // Hash bucket lookup
+    }
+    // Fallback to full scan
+    _ => self.fallback_scan(collection_id, state, expr),
+}
+```
+
+### Performance Tips
+
+<AccordionGroup>
+  <Accordion title="Create indexes on frequently queried fields">
+    Index fields used in WHERE clauses to avoid full collection scans.
+    
+    ```bash
+    # Slow: full scan
+    DOC.FIND users WHERE "email = 'alice@example.com'"
+    
+    # Fast: hash index lookup
+    DOC.CREATEINDEX users email hash
+    DOC.FIND users WHERE "email = 'alice@example.com'"
+    ```
+  </Accordion>
+  
+  <Accordion title="Use sorted indexes for range queries">
+    Numeric comparisons benefit from B-tree sorted indexes.
+    
+    ```bash
+    DOC.CREATEINDEX products price sorted
+    DOC.FIND products WHERE "price >= 10 AND price <= 100"
+    ```
+  </Accordion>
+  
+  <Accordion title="Project only needed fields">
+    Reduce bandwidth and parsing overhead with field projection.
+    
+    ```bash
+    DOC.FIND users WHERE "active = true" PROJECT id name
+    ```
+  </Accordion>
+  
+  <Accordion title="Combine AND conditions for intersection">
+    Multiple indexed conditions use set intersection.
+    
+    ```bash
+    # Both fields indexed
+    DOC.FIND users WHERE "city = 'NYC' AND age >= 30"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Binary Packed Format
+
+From `kora-doc/src/lib.rs:18-26`:
+
+<Steps>
+  <Step title="Decomposition">
+    JSON is recursively walked, each field gets a numeric `FieldId`, and string values are dictionary-encoded when cardinality is low.
+  </Step>
+  
+  <Step title="Packed Encoding">
+    Fields are stored in a flat binary buffer with an offset table sorted by field ID, enabling O(log F) single-field reads via binary search.
+  </Step>
+  
+  <Step title="Recomposition">
+    The inverse process rebuilds `serde_json::Value` from packed bytes, supporting full reconstruction or field-level projection.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Vector Search" icon="brain" href="/features/vector-search">
+    Add semantic similarity search
+  </Card>
+  <Card title="Change Data Capture" icon="timeline" href="/features/change-data-capture">
+    Stream document changes
+  </Card>
+  <Card title="Persistence" icon="database" href="/features/persistence">
+    Configure snapshots and WAL
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/document-commands">
+    Complete DOC.* command reference
+  </Card>
+</CardGroup>

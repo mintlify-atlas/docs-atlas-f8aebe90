@@ -1,0 +1,402 @@
+---
+title: Building from Source
+description: Build, test, and benchmark the Kora workspace
+---
+
+Kora is a Rust workspace monorepo with 11 crates. This guide covers building from source, running tests, benchmarks, and development workflows.
+
+## Prerequisites
+
+- **Rust 1.82+** (edition 2021)
+- **Cargo** (comes with Rust)
+- **Git**
+
+Install Rust via [rustup](https://rustup.rs/):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+## Clone the Repository
+
+```bash
+git clone https://github.com/Augani/Kora.git
+cd Kora
+```
+
+## Workspace Structure
+
+Kora uses a Cargo workspace with the following crates:
+
+```
+kora/
+├── Cargo.toml              # workspace root
+├── kora-core/              # data structures, shard engine, memory management
+├── kora-protocol/          # RESP2 parser and serializer
+├── kora-server/            # TCP/Unix server, shard-affinity I/O engine
+├── kora-embedded/          # library mode — direct API, no network
+├── kora-storage/           # WAL, RDB snapshots, LZ4-compressed cold-tier backend
+├── kora-doc/               # JSON document database, secondary indexes, WHERE queries
+├── kora-vector/            # HNSW approximate nearest neighbor index
+├── kora-cdc/               # change data capture with per-shard ring buffers
+├── kora-pubsub/            # publish/subscribe messaging with pattern support
+├── kora-observability/     # hot-key detection, per-command stats, latency histograms
+└── kora-cli/               # CLI binary with TOML config support
+```
+
+### Dependency Graph
+
+The workspace follows a **strict, acyclic dependency graph**:
+
+```
+cli → server → core, protocol, storage, vector, cdc, pubsub, observability, doc
+embedded → core, storage, vector, cdc, observability
+```
+
+**Important**: `kora-core` has **zero** internal workspace dependencies. This is a fundamental design principle—never introduce circular dependencies between crates.
+
+## Building
+
+### Build the Entire Workspace
+
+```bash
+cargo build
+```
+
+This compiles all crates in debug mode with fast compilation and debug symbols.
+
+### Build in Release Mode
+
+```bash
+cargo build --release
+```
+
+Release builds enable optimizations and produce production-ready binaries in `target/release/`.
+
+The release profile is configured with:
+- `lto = "thin"` — thin link-time optimization
+- `codegen-units = 1` — maximum optimization (slower build, faster binary)
+- `strip = true` — remove debug symbols
+
+### Build a Specific Crate
+
+```bash
+cargo build -p kora-core
+cargo build -p kora-embedded
+cargo build -p kora-cli --release
+```
+
+### Build the CLI Binary
+
+```bash
+cargo build --release -p kora-cli
+```
+
+The binary will be at `./target/release/kora-cli`.
+
+## Running the Server
+
+After building, start the server:
+
+```bash
+./target/release/kora-cli --port 6379 --workers 4
+```
+
+Or run directly with `cargo run`:
+
+```bash
+cargo run --release -- --port 6379 --workers 4
+```
+
+### CLI Arguments
+
+```bash
+kora-cli \
+  --bind 0.0.0.0 \
+  --port 6379 \
+  --workers 8 \
+  --log-level info \
+  --password "s3cret" \
+  --data-dir /var/lib/kora \
+  --snapshot-interval-secs 300 \
+  --snapshot-retain 24 \
+  --cdc-capacity 65536 \
+  --metrics-port 9090 \
+  --unix-socket /tmp/kora.sock
+```
+
+### Using a Config File
+
+Create `kora.toml`:
+
+```toml
+bind = "0.0.0.0"
+port = 6379
+workers = 8
+log_level = "info"
+password = "s3cret"
+cdc_capacity = 65536
+metrics_port = 9090
+unix_socket = "/tmp/kora.sock"
+
+[storage]
+data_dir = "/var/lib/kora"
+wal_sync = "every_second"   # every_write | every_second | os_managed
+wal_enabled = true
+rdb_enabled = true
+snapshot_interval_secs = 300
+snapshot_retain = 24
+wal_max_bytes = 67108864
+```
+
+Then run:
+
+```bash
+cargo run --release -- --config kora.toml
+```
+
+CLI arguments override config file values.
+
+## Testing
+
+### Run All Tests
+
+```bash
+cargo test --workspace
+```
+
+This runs unit tests, integration tests, and doc tests across all crates.
+
+### Run Tests for a Specific Crate
+
+```bash
+cargo test -p kora-core
+cargo test -p kora-protocol
+cargo test -p kora-embedded
+```
+
+### Run a Specific Test
+
+```bash
+cargo test -p kora-core test_basic_set_get
+cargo test --test integration -p kora-server
+```
+
+### Run Stress Tests
+
+Kora includes stress tests with concurrent workloads:
+
+```bash
+cargo test --test stress -p kora-core
+cargo test --test integration -p kora-server
+```
+
+### Run Tests with Output
+
+```bash
+cargo test --workspace -- --nocapture
+```
+
+## Benchmarks
+
+Kora uses [Criterion](https://github.com/bheisler/criterion.rs) for benchmarks.
+
+### Run All Benchmarks
+
+```bash
+cargo bench --workspace
+```
+
+### Run Benchmarks for a Specific Crate
+
+```bash
+cargo bench -p kora-core
+cargo bench -p kora-protocol
+cargo bench -p kora-vector
+```
+
+Benchmark results are saved to `target/criterion/` with HTML reports.
+
+### Available Benchmarks
+
+- **kora-core**: `SET`, `GET`, `INCR`, `MGET` operations
+- **kora-protocol**: RESP2 parsing and serialization
+- **kora-vector**: HNSW index construction and search
+
+## Code Quality
+
+### Run Clippy Lints
+
+Kora enforces zero Clippy warnings:
+
+```bash
+cargo clippy --workspace --all-targets
+```
+
+All code must pass Clippy before submitting a PR.
+
+### Format Code
+
+```bash
+cargo fmt --all
+```
+
+Use default `rustfmt` settings. All code must be formatted before committing.
+
+### Check Without Building
+
+Fast type-checking without codegen:
+
+```bash
+cargo check --workspace
+```
+
+## Documentation
+
+### Build Documentation
+
+```bash
+cargo doc --workspace --no-deps
+```
+
+This generates rustdoc documentation for all workspace crates.
+
+### Open Documentation in Browser
+
+```bash
+cargo doc --workspace --no-deps --open
+```
+
+### Document a Specific Crate
+
+```bash
+cargo doc --open -p kora-embedded
+```
+
+## Development Workflow
+
+Before committing, always run:
+
+```bash
+cargo fmt --all && \
+cargo clippy --workspace --all-targets && \
+cargo test --workspace
+```
+
+This ensures:
+1. Code is properly formatted
+2. No Clippy warnings
+3. All tests pass
+
+## Build Profiles
+
+### Debug Profile (default)
+
+```bash
+cargo build
+```
+
+- Fast compilation
+- Debug symbols included
+- No optimizations
+- Binaries in `target/debug/`
+
+### Release Profile
+
+```bash
+cargo build --release
+```
+
+- Slow compilation
+- Optimizations enabled (`-O3`)
+- Thin LTO, single codegen unit
+- Debug symbols stripped
+- Binaries in `target/release/`
+
+### Bench Profile
+
+```bash
+cargo bench
+```
+
+Inherits from release with debug symbols enabled for profiling.
+
+## Platform-Specific Notes
+
+### Linux
+
+Kora uses `io-uring` for async I/O on Linux. Ensure you have a recent kernel (5.1+):
+
+```bash
+uname -r  # check kernel version
+```
+
+### macOS
+
+No special requirements. Standard Tokio async I/O is used.
+
+### Windows
+
+Kora should build on Windows, but production deployment is recommended on Linux for optimal performance.
+
+## Troubleshooting
+
+### Build Fails with Missing Dependencies
+
+Ensure you're using Rust 1.82+:
+
+```bash
+rustc --version
+rustup update
+```
+
+### Tests Fail Intermittently
+
+Some tests involve concurrency and may rarely fail due to timing. Re-run tests:
+
+```bash
+cargo test --workspace -- --test-threads=1
+```
+
+### Clippy Warnings
+
+Fix all warnings before submitting a PR:
+
+```bash
+cargo clippy --workspace --all-targets --fix
+```
+
+### Slow Builds
+
+Use faster linker ([`mold`](https://github.com/rui314/mold) on Linux, [`lld`](https://lld.llvm.org/) on macOS):
+
+```bash
+# Install mold (Linux)
+sudo apt install mold
+
+# Add to .cargo/config.toml
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+```
+
+## Cross-Compilation
+
+Kora can be cross-compiled for different targets:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+For static binaries (no libc dependency):
+
+```bash
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+## Next Steps
+
+- [Contributing Guide](/development/contributing) — submitting PRs and code standards
+- [Embedded Mode](/development/embedded-mode) — using Kora as a library
+- [Architecture](/concepts/architecture) — understanding the shard-affinity design

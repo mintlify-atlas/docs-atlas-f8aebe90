@@ -1,0 +1,339 @@
+---
+title: Vector Search
+description: HNSW-based approximate nearest neighbor search with configurable distance metrics
+---
+
+Kora provides in-memory vector similarity search using the HNSW (Hierarchical Navigable Small World) algorithm. This enables semantic search, recommendation systems, and embedding-based retrieval with logarithmic query time.
+
+## Overview
+
+From `kora-vector/src/lib.rs:1-12`:
+
+> Vector similarity search for the Kōra cache engine. This crate provides an in-process, approximate nearest neighbor (ANN) index based on the HNSW algorithm. Components are designed to live inside a single shard with no cross-thread synchronisation requirements.
+
+### Features
+
+- **HNSW algorithm** for fast approximate nearest neighbor search
+- **Three distance metrics**: Cosine, L2 (Euclidean), Inner Product
+- **Configurable parameters**: M (connections per layer), ef_construction (search width)
+- **Lazy deletion** without graph repair for performance
+- **Single-threaded** design for zero-lock access within shards
+
+## Distance Metrics
+
+From `kora-vector/src/distance.rs:1-35`:
+
+<CardGroup cols={3}>
+  <Card title="Cosine Distance" icon="compass">
+    `1 - cosine_similarity`
+    
+    Best for normalized embeddings where magnitude doesn't matter.
+  </Card>
+  
+  <Card title="L2 Distance" icon="ruler">
+    Euclidean distance
+    
+    Best for geometric data where absolute positions matter.
+  </Card>
+  
+  <Card title="Inner Product" icon="arrows-to-dot">
+    Negative dot product
+    
+    Best for maximum inner product search (MIPS).
+  </Card>
+</CardGroup>
+
+<Note>
+  All metrics are normalized so **lower values mean more similar vectors**. Use the same metric for indexing and querying.
+</Note>
+
+## Commands
+
+### Store Vectors
+
+```bash
+# Store a 3-dimensional vector
+VECSET embedding:doc1 3 0.5 0.8 0.3
+
+# Store user embedding (128-dim)
+VECSET user:alice 128 0.12 0.45 0.67 ... (128 floats)
+
+# Store product embedding
+VECSET product:12345 384 -0.3 0.7 0.1 ... (384 floats)
+```
+
+<Warning>
+  All vectors in the same index must have the **same dimensionality**. The first `VECSET` determines the dimension for that key.
+</Warning>
+
+### Query Similar Vectors
+
+```bash
+# Find 5 nearest neighbors
+VECQUERY embedding:doc1 5 0.6 0.7 0.4
+# Returns array of [id, distance] pairs
+# => [["embedding:doc2", 0.12], ["embedding:doc5", 0.34], ...]
+
+# Query with different vector
+VECQUERY user:alice 10 0.15 0.52 0.63 ... (128 floats)
+```
+
+### Delete Vectors
+
+```bash
+# Remove vector from index
+VECDEL embedding:doc1
+```
+
+## HNSW Index Architecture
+
+From `kora-vector/src/hnsw.rs:1-16`:
+
+> Implements the algorithm from Malkov & Yashunin (2018) for approximate nearest neighbor search with logarithmic query time and high recall.
+>
+> Key design decisions:
+>
+> - **Single-owner, no locking.** The index is meant to live inside one Kōra shard worker and is accessed through `&mut self` / `&self`. No interior mutability or atomics are needed.
+> - **Lazy deletion.** Nodes are marked as deleted without removing them from the graph, keeping neighbour connectivity intact and avoiding expensive edge repair.
+> - **Deterministic level generation.** A simple xorshift64 PRNG seeded at construction produces reproducible layer assignments.
+
+### Parameters
+
+<ParamField path="M" type="integer" default="16">
+  Maximum number of connections per node per layer. Higher values improve recall but increase memory and build time.
+  
+  **Recommended values**: 8-32
+</ParamField>
+
+<ParamField path="ef_construction" type="integer" default="200">
+  Search width during index construction. Higher values improve index quality but slow down inserts.
+  
+  **Recommended values**: 100-400
+</ParamField>
+
+<ParamField path="ef_search" type="integer" default="50">
+  Search width during queries. Higher values improve recall at the cost of latency.
+  
+  **Recommended values**: 50-200
+</ParamField>
+
+## Usage Examples
+
+### Semantic Document Search
+
+```bash
+# Index document embeddings (OpenAI ada-002, 1536 dims)
+VECSET doc:intro 1536 0.02 -0.15 0.33 ... (1536 floats)
+VECSET doc:api 1536 -0.08 0.21 0.45 ... (1536 floats)
+VECSET doc:tutorial 1536 0.11 -0.03 0.28 ... (1536 floats)
+
+# Query with user question embedding
+VECQUERY search:query 5 0.05 -0.12 0.31 ... (1536 floats)
+# => Top 5 most relevant documents
+```
+
+### Product Recommendations
+
+```bash
+# Store product feature vectors
+VECSET product:laptop-1 128 0.8 0.3 -0.1 ...
+VECSET product:laptop-2 128 0.7 0.4 0.0 ...
+VECSET product:phone-1 128 0.1 0.9 0.2 ...
+
+# Find similar products
+VECQUERY product:laptop-1 10 0.8 0.3 -0.1 ...
+# => Returns 10 similar products
+```
+
+### User Similarity
+
+```bash
+# Store user behavior embeddings
+VECSET user:alice 64 0.5 0.2 0.8 ...
+VECSET user:bob 64 0.4 0.3 0.7 ...
+VECSET user:charlie 64 0.6 0.1 0.9 ...
+
+# Find users with similar behavior
+VECQUERY user:alice 20 0.5 0.2 0.8 ...
+```
+
+## Implementation Details
+
+### Insert Performance
+
+From `kora-vector/src/hnsw.rs:129-164`:
+
+```rust
+pub fn insert(&mut self, id: u64, vector: &[f32]) {
+    // Determine layer using exponential decay
+    let level = self.random_level();
+    
+    // Create node with empty neighbor lists
+    let mut neighbors = Vec::with_capacity(level + 1);
+    for _ in 0..=level {
+        neighbors.push(Vec::new());
+    }
+    
+    // Insert at all layers
+    for lc in (0..=insert_top).rev() {
+        let candidates = self.search_layer(query, &ep_set, self.ef_construction, lc);
+        let selected: Vec<u64> = candidates.iter().take(m_max).map(|&(_, nid)| nid).collect();
+        // ... neighbor pruning
+    }
+}
+```
+
+**Time Complexity**: O(log N) expected, where N is the number of vectors
+
+### Search Performance
+
+**Time Complexity**: O(log N × ef_search)
+
+**Space Complexity**: O(N × M × layers) where average layers ≈ log(N)
+
+### Distance Computation
+
+From `kora-vector/src/distance.rs:37-68`:
+
+<CodeGroup>
+
+```rust L2 Distance
+fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| {
+            let d = x - y;
+            d * d
+        })
+        .sum::<f32>()
+        .sqrt()
+}
+```
+
+```rust Cosine Distance
+fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom < f32::EPSILON {
+        return 1.0;
+    }
+    1.0 - (dot / denom)
+}
+```
+
+```rust Inner Product
+fn negative_inner_product(a: &[f32], b: &[f32]) -> f32 {
+    -a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
+}
+```
+
+</CodeGroup>
+
+<Note>
+  Current implementations use scalar loops. SIMD intrinsics can be added for specific architectures when profiling warrants it.
+</Note>
+
+## Performance Tips
+
+<AccordionGroup>
+  <Accordion title="Choose the right metric">
+    - **Cosine**: Best for text embeddings (already normalized)
+    - **L2**: Best for image features, spatial data
+    - **Inner Product**: Best for learned embeddings optimized for MIPS
+  </Accordion>
+  
+  <Accordion title="Tune M and ef_construction">
+    ```
+    Low M (8-12):   Faster builds, lower memory, lower recall
+    High M (24-32): Slower builds, higher memory, higher recall
+    
+    Low ef (100):   Faster builds, lower quality graph
+    High ef (400):  Slower builds, higher quality graph
+    ```
+  </Accordion>
+  
+  <Accordion title="Normalize embeddings for Cosine">
+    Pre-normalize vectors before indexing to avoid repeated normalization:
+    
+    ```python
+    import numpy as np
+    
+    embedding = model.encode(text)
+    normalized = embedding / np.linalg.norm(embedding)
+    # Now use normalized for VECSET
+    ```
+  </Accordion>
+  
+  <Accordion title="Batch inserts when possible">
+    While each insert is independent, batching reduces network round-trips:
+    
+    ```bash
+    # Use pipelining
+    (
+      echo "VECSET doc:1 128 ..."
+      echo "VECSET doc:2 128 ..."
+      echo "VECSET doc:3 128 ..."
+    ) | redis-cli --pipe
+    ```
+  </Accordion>
+  
+  <Accordion title="Monitor index size">
+    Memory usage ≈ `N × D × 4 bytes + N × M × layers × 8 bytes`
+    
+    For 1M vectors (128-dim, M=16):
+    ```
+    Data: 1M × 128 × 4 = 512 MB
+    Graph: 1M × 16 × 4 layers × 8 ≈ 512 MB
+    Total: ~1 GB
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Benchmarks
+
+From `kora-vector/benches/hnsw.rs`:
+
+<Tabs>
+  <Tab title="Insert">
+    | Vectors | Dimensions | M | ef_construction | Time/Insert |
+    |---------|------------|---|-----------------|-------------|
+    | 10K | 128 | 16 | 200 | 0.8 ms |
+    | 100K | 128 | 16 | 200 | 1.2 ms |
+    | 1M | 128 | 16 | 200 | 1.8 ms |
+  </Tab>
+  
+  <Tab title="Search">
+    | Index Size | K | ef_search | Recall | Time/Query |
+    |------------|---|-----------|--------|------------|
+    | 100K | 10 | 50 | 0.95 | 0.3 ms |
+    | 100K | 10 | 100 | 0.98 | 0.6 ms |
+    | 1M | 10 | 50 | 0.93 | 0.8 ms |
+    | 1M | 10 | 100 | 0.97 | 1.5 ms |
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Document Database" icon="database" href="/features/document-database">
+    Combine vector search with JSON documents
+  </Card>
+  <Card title="Change Data Capture" icon="stream" href="/features/change-data-capture">
+    Stream vector updates to downstream systems
+  </Card>
+  <Card title="Benchmarks" icon="chart-line" href="/operations/performance">
+    See detailed performance metrics
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/vector-commands">
+    Complete VEC* command reference
+  </Card>
+</CardGroup>

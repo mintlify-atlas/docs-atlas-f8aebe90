@@ -1,0 +1,367 @@
+---
+title: Key-Value Store
+description: Redis-compatible core data structures with String, List, Hash, and Set operations
+---
+
+Kora provides a rich set of Redis-compatible data structures designed for high-performance caching and in-memory storage. The key-value store is sharded across multiple threads for parallel execution and implements lazy TTL expiration.
+
+## Data Types
+
+Kora supports the following core data types:
+
+- **String** — simple byte values with optional TTL
+- **List** — ordered collections of byte strings
+- **Hash** — field→value mappings
+- **Set** — unordered collections of unique members
+- **Sorted Set** — ordered sets with numeric scores
+- **Stream** — append-only logs with consumer groups
+
+## String Commands
+
+String values are the most basic data type. They can store text, binary data, or serialized objects.
+
+### Basic Operations
+
+```bash
+# Store a simple string
+SET user:1000:name "Alice"
+
+# Retrieve it
+GET user:1000:name
+# => "Alice"
+
+# Store with expiration (10 seconds)
+SET session:abc123 "user_data" EX 10
+
+# Store only if key doesn't exist
+SET counter:visitors 0 NX
+```
+
+### Numeric Operations
+
+```bash
+# Increment a counter
+INCR page_views
+# => 1
+
+INCRBY downloads 5
+# => 5
+
+# Decrement
+DECR inventory:item42
+# => 99
+
+# Float increment
+INCRBYFLOAT temperature 0.5
+# => "23.5"
+```
+
+### String Manipulation
+
+```bash
+# Append to existing value
+SET log "[INFO] "
+APPEND log "Server started"
+# => 20 (new length)
+
+# Get string length
+STRLEN log
+# => 20
+
+# Get substring
+GETRANGE log 0 5
+# => "[INFO]"
+
+# Overwrite at offset
+SETRANGE log 1 "WARN"
+```
+
+### Batch Operations
+
+```bash
+# Set multiple keys atomically
+MSET user:1:name "Alice" user:2:name "Bob" user:3:name "Charlie"
+
+# Get multiple keys
+MGET user:1:name user:2:name user:3:name
+# => ["Alice", "Bob", "Charlie"]
+```
+
+## List Commands
+
+Lists are ordered collections of strings, implemented as doubly-linked lists for efficient head/tail operations.
+
+### Push and Pop
+
+```bash
+# Push to the head (left)
+LPUSH queue:tasks "task1" "task2" "task3"
+# => 3
+
+# Push to the tail (right)
+RPUSH queue:tasks "task4"
+# => 4
+
+# Pop from the head
+LPOP queue:tasks
+# => "task3"
+
+# Pop from the tail
+RPOP queue:tasks
+# => "task4"
+```
+
+### Range Access
+
+```bash
+# Get list length
+LLEN queue:tasks
+# => 2
+
+# Get range of elements (0-based, inclusive)
+LRANGE queue:tasks 0 -1
+# => ["task2", "task1"]
+
+# Get element at index
+LINDEX queue:tasks 0
+# => "task2"
+```
+
+### List Manipulation
+
+```bash
+# Set element at index
+LSET queue:tasks 0 "updated_task"
+
+# Insert before/after pivot
+LINSERT queue:tasks BEFORE "task1" "new_task"
+
+# Remove elements
+LREM queue:tasks 1 "task1"  # remove 1 occurrence
+
+# Trim list to range
+LTRIM queue:tasks 0 99  # keep first 100 items
+```
+
+## Hash Commands
+
+Hashes are ideal for representing objects with multiple fields.
+
+### Field Operations
+
+```bash
+# Set single field
+HSET user:1000 name "Alice" age "30" city "NYC"
+# => 3
+
+# Get single field
+HGET user:1000 name
+# => "Alice"
+
+# Get all fields and values
+HGETALL user:1000
+# => ["name", "Alice", "age", "30", "city", "NYC"]
+```
+
+### Batch Operations
+
+```bash
+# Get multiple fields
+HMGET user:1000 name age
+# => ["Alice", "30"]
+
+# Get all field names
+HKEYS user:1000
+# => ["name", "age", "city"]
+
+# Get all values
+HVALS user:1000
+# => ["Alice", "30", "NYC"]
+```
+
+### Hash Utilities
+
+```bash
+# Check field existence
+HEXISTS user:1000 email
+# => 0
+
+# Get field count
+HLEN user:1000
+# => 3
+
+# Delete fields
+HDEL user:1000 age
+# => 1
+
+# Increment numeric field
+HINCRBY user:1000 login_count 1
+# => 1
+```
+
+## Set Commands
+
+Sets store unique, unordered collections of members.
+
+### Basic Operations
+
+```bash
+# Add members
+SADD tags:post1 "rust" "database" "performance"
+# => 3
+
+# Check membership
+SISMEMBER tags:post1 "rust"
+# => 1
+
+# Get all members
+SMEMBERS tags:post1
+# => ["rust", "database", "performance"]
+```
+
+### Set Operations
+
+```bash
+# Union of sets
+SADD tags:post2 "rust" "async" "tokio"
+SUNION tags:post1 tags:post2
+# => ["rust", "database", "performance", "async", "tokio"]
+
+# Intersection
+SINTER tags:post1 tags:post2
+# => ["rust"]
+
+# Difference
+SDIFF tags:post1 tags:post2
+# => ["database", "performance"]
+```
+
+### Set Utilities
+
+```bash
+# Get cardinality
+SCARD tags:post1
+# => 3
+
+# Remove members
+SREM tags:post1 "database"
+# => 1
+
+# Pop random member
+SPOP tags:post1
+# => "performance"
+
+# Get random member without removing
+SRANDMEMBER tags:post1
+# => "rust"
+```
+
+## Key Management
+
+### TTL and Expiration
+
+```bash
+# Set expiration in seconds
+EXPIRE session:abc 3600
+
+# Set expiration in milliseconds
+PEXPIRE cache:user:1000 60000
+
+# Get remaining TTL
+TTL session:abc
+# => 3599
+
+# Remove expiration
+PERSIST session:abc
+```
+
+### Key Inspection
+
+```bash
+# Check if key exists
+EXISTS user:1000
+# => 1
+
+# Get value type
+TYPE user:1000
+# => hash
+
+# Delete keys
+DEL user:1000 user:1001
+# => 2
+
+# Rename key
+RENAME old_key new_key
+
+# Copy key
+COPY source dest REPLACE
+```
+
+### Database Operations
+
+```bash
+# Count keys in database
+DBSIZE
+# => 42
+
+# Scan keys with pattern
+SCAN 0 MATCH user:* COUNT 100
+
+# List keys (use with caution in production)
+KEYS user:*
+
+# Flush database
+FLUSHDB
+```
+
+## Implementation Details
+
+### Architecture
+
+From `kora-core/src/shard/store.rs:1-14`:
+
+```rust
+/// Per-shard key-value store with full command execution.
+///
+/// `ShardStore` is the workhorse of the Kōra engine. Each shard worker thread
+/// owns exactly one instance, so every operation runs single-threaded with no
+/// locking. The store handles:
+///
+/// - String, list, hash, set, sorted set, stream, HyperLogLog, bitmap, and
+///   geo commands.
+/// - Lazy TTL expiration on access plus periodic bounded-sample sweeps.
+/// - LFU-based eviction when a memory limit is configured.
+```
+
+### Performance Characteristics
+
+| Operation | Time Complexity | Notes |
+|-----------|----------------|-------|
+| GET/SET | O(1) | Hash table lookup |
+| INCR/DECR | O(1) | Atomic in-place mutation |
+| LPUSH/RPUSH | O(1) | Head/tail operations |
+| LRANGE | O(S+N) | S = start offset, N = range size |
+| HGET/HSET | O(1) | Hash table per key |
+| SADD/SREM | O(1) | Hash set operations |
+| SINTER | O(N*M) | N = smallest set, M = number of sets |
+
+<Note>
+  All data structures use `CompactKey` for efficient memory representation and `AHashMap` for fast hashing.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Document Database" icon="database" href="/features/document-database">
+    Store JSON documents with secondary indexes
+  </Card>
+  <Card title="Persistence" icon="hard-drive" href="/features/persistence">
+    Configure WAL and RDB snapshots
+  </Card>
+  <Card title="Vector Search" icon="magnifying-glass" href="/features/vector-search">
+    Add semantic search with HNSW
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/string-commands">
+    Complete command documentation
+  </Card>
+</CardGroup>

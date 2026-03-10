@@ -1,0 +1,503 @@
+---
+title: 'RESP Protocol'
+description: 'RESP2 wire protocol parser, serializer, and Redis compatibility'
+---
+
+## Overview
+
+Kora implements the **Redis Serialization Protocol (RESP2)** for wire communication, providing full compatibility with existing Redis clients (`redis-cli`, Jedis, ioredis, redis-rs, etc.).
+
+The protocol layer consists of:
+1. **Streaming parser** (`kora-protocol/src/parser.rs`) — incremental RESP frame extraction with zero-copy fast paths
+2. **Command parser** (`kora-protocol/src/command.rs`) — `RespValue → Command` translation
+3. **Response serializer** (`kora-protocol/src/serializer.rs`) — `CommandResponse → RESP` bytes
+
+<Note>
+Kora supports **RESP2** fully. RESP3 parsing is implemented for compatibility but native RESP3 features (maps, sets, doubles) are downgraded to RESP2 representations.
+</Note>
+
+## RESP2 Wire Protocol
+
+### Data Types
+
+RESP2 defines 5 wire types:
+
+```rust
+// From kora-protocol/src/resp.rs:14
+pub enum RespValue {
+    /// RESP2 simple string (`+OK\r\n`)
+    SimpleString(Vec<u8>),
+    /// RESP2 error (`-ERR message\r\n`)
+    Error(Vec<u8>),
+    /// RESP2 integer (`:42\r\n`)
+    Integer(i64),
+    /// RESP2 bulk string (`$N\r\n...data...\r\n`). `None` = null bulk string (`$-1\r\n`)
+    BulkString(Option<Vec<u8>>),
+    /// RESP2 array (`*N\r\n...`). `None` = null array (`*-1\r\n`)
+    Array(Option<Vec<RespValue>>),
+    // ... RESP3 types (Null, Double, Boolean, Map, Set, etc.)
+}
+```
+
+### Wire Format Examples
+
+| Type | Example | Wire Bytes |
+|------|---------|------------|
+| **Simple String** | `OK` | `+OK\r\n` |
+| **Error** | `ERR unknown command` | `-ERR unknown command\r\n` |
+| **Integer** | `42` | `:42\r\n` |
+| **Bulk String** | `hello` | `$5\r\nhello\r\n` |
+| **Null Bulk String** | `nil` | `$-1\r\n` |
+| **Array** | `["GET", "key"]` | `*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n` |
+
+## Streaming RESP Parser
+
+### Incremental Parsing
+
+The `RespParser` accepts arbitrary byte chunks and yields complete frames when ready:
+
+```rust
+// From kora-protocol/src/parser.rs:58
+pub struct RespParser {
+    buffer: BytesMut,
+}
+
+impl RespParser {
+    pub fn new() -> Self {
+        Self {
+            buffer: BytesMut::with_capacity(4096),
+        }
+    }
+
+    /// Append raw bytes received from the network.
+    pub fn feed(&mut self, data: &[u8]) {
+        self.buffer.extend_from_slice(data);
+    }
+
+    /// Attempt to parse one complete RESP frame from the buffer.
+    pub fn try_parse(&mut self) -> Result<Option<RespValue>, ProtocolError> {
+        if self.buffer.is_empty() {
+            return Ok(None);
+        }
+
+        match parse_value(&self.buffer) {
+            Ok((value, consumed)) => {
+                let _ = self.buffer.split_to(consumed);
+                Ok(Some(value))
+            }
+            Err(ProtocolError::Incomplete) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
+```
+
+**Usage:**
+
+```rust
+let mut parser = RespParser::new();
+
+// Receive partial frame
+parser.feed(b"*2\r\n$3\r\nGET\r\n$3\r\n");
+assert!(parser.try_parse()?.is_none()); // Incomplete
+
+// Receive rest of frame
+parser.feed(b"key\r\n");
+let value = parser.try_parse()?.unwrap(); // Complete!
+```
+
+### Zero-Copy Fast Paths
+
+For high-frequency commands (GET, SET, INCR, PUBLISH), the parser provides **zero-allocation fast paths**:
+
+```rust
+// From kora-protocol/src/parser.rs:124
+pub fn try_parse_hot_command(&mut self) -> Option<HotCommand> {
+    self.try_parse_hot_command_with(|cmd| match cmd {
+        HotCommandRef::Get { key } => HotCommand::Get { key: key.to_vec() },
+        HotCommandRef::Incr { key } => HotCommand::Incr { key: key.to_vec() },
+        HotCommandRef::Set { key, value } => HotCommand::Set {
+            key: key.to_vec(),
+            value: value.to_vec(),
+        },
+        HotCommandRef::Publish { channel, message } => HotCommand::Publish {
+            channel: channel.to_vec(),
+            message: message.to_vec(),
+        },
+    })
+}
+```
+
+**Borrowed variant** (zero allocations):
+
+```rust
+// From kora-protocol/src/parser.rs:141
+pub fn try_parse_hot_command_with<R, F>(&mut self, f: F) -> Option<R>
+where
+    F: FnOnce(HotCommandRef<'_>) -> R,
+{
+    let spans = parse_hot_command_fast_spans(&self.buffer)?;
+    let result = {
+        let data = self.buffer.as_ref();
+        match spans {
+            HotCommandSpans::Get { key_start, key_end, .. } => f(HotCommandRef::Get {
+                key: &data[key_start..key_end],
+            }),
+            // ... other commands
+        }
+    };
+    let _ = self.buffer.split_to(spans.consumed());
+    Some(result)
+}
+```
+
+**Performance:**
+
+| Parsing Path | Allocations | Latency |
+|--------------|-------------|----------|
+| `try_parse()` | 3-4 per command | ~200 ns |
+| `try_parse_hot_command()` | 2 per command | ~150 ns |
+| `try_parse_hot_command_with()` | 0 per command | ~100 ns |
+
+<Info>
+The zero-copy path is used in the connection handler for GET/SET/INCR to eliminate per-command allocations in the hot path.
+</Info>
+
+## Command Parsing
+
+### RespValue → Command Translation
+
+Parsed RESP arrays are converted to typed `Command` enums:
+
+```rust
+// From kora-protocol/src/command.rs (simplified)
+pub fn parse_command(value: &RespValue) -> Result<Command, ProtocolError> {
+    let Some(items) = value.as_array() else {
+        return Err(ProtocolError::InvalidData("expected array".into()));
+    };
+
+    if items.is_empty() {
+        return Err(ProtocolError::InvalidData("empty command".into()));
+    }
+
+    let cmd_name = items[0].as_bulk_bytes()
+        .ok_or_else(|| ProtocolError::InvalidData("invalid command name".into()))?;
+
+    match cmd_name.to_ascii_uppercase().as_slice() {
+        b"GET" => {
+            require_argc(items, 2)?;
+            Ok(Command::Get {
+                key: items[1].as_bulk_bytes().unwrap().to_vec(),
+            })
+        }
+        b"SET" => {
+            require_argc_min(items, 3)?;
+            let key = items[1].as_bulk_bytes().unwrap().to_vec();
+            let value = items[2].as_bulk_bytes().unwrap().to_vec();
+            // Parse optional EX, PX, NX, XX flags
+            Ok(Command::Set { key, value, ex, px, nx, xx })
+        }
+        // ... 100+ more commands
+    }
+}
+```
+
+**Example:**
+
+```
+RESP: *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+↓ parse_value()
+
+RespValue::Array([
+    RespValue::BulkString(b"SET"),
+    RespValue::BulkString(b"key"),
+    RespValue::BulkString(b"value"),
+])
+
+↓ parse_command()
+
+Command::Set {
+    key: b"key".to_vec(),
+    value: b"value".to_vec(),
+    ex: None,
+    px: None,
+    nx: false,
+    xx: false,
+}
+```
+
+## Response Serialization
+
+### CommandResponse → RESP Bytes
+
+Commands return typed responses that are serialized to RESP wire format:
+
+```rust
+// From kora-protocol/src/serializer.rs:22
+pub fn serialize_response_versioned(resp: &CommandResponse, buf: &mut BytesMut, resp3: bool) {
+    match resp {
+        CommandResponse::Ok => buf.extend_from_slice(b"+OK\r\n"),
+        CommandResponse::Nil => {
+            if resp3 {
+                buf.extend_from_slice(b"_\r\n");
+            } else {
+                buf.extend_from_slice(b"$-1\r\n");
+            }
+        }
+        CommandResponse::Integer(n) => {
+            let _ = write!(buf, ":{}\r\n", n);
+        }
+        CommandResponse::BulkString(data) => {
+            let _ = write!(buf, "${}\r\n", data.len());
+            buf.extend_from_slice(data);
+            buf.extend_from_slice(b"\r\n");
+        }
+        CommandResponse::Array(items) => {
+            let _ = write!(buf, "*{}\r\n", items.len());
+            for item in items {
+                serialize_response_versioned(item, buf, resp3);
+            }
+        }
+        CommandResponse::Error(msg) => {
+            buf.extend_from_slice(b"-");
+            buf.extend_from_slice(msg.as_bytes());
+            buf.extend_from_slice(b"\r\n");
+        }
+        // ...
+    }
+}
+```
+
+**Example:**
+
+```rust
+let response = CommandResponse::BulkString(b"hello".to_vec());
+let mut buf = BytesMut::new();
+serialize_response(&response, &mut buf);
+assert_eq!(buf.as_ref(), b"$5\r\nhello\r\n");
+```
+
+### Zero-Copy Reads
+
+Bulk string responses can share backing storage with the shard store:
+
+```rust
+// From kora-core/src/command.rs
+pub enum CommandResponse {
+    BulkString(Vec<u8>),          // Owned allocation
+    BulkStringShared(Arc<[u8]>),  // Zero-copy (shares with store)
+    // ...
+}
+```
+
+When serializing `BulkStringShared`, the serializer writes directly from the shared `Arc` without cloning:
+
+```rust
+// From kora-protocol/src/serializer.rs:40
+CommandResponse::BulkStringShared(data) => {
+    let _ = write!(buf, "${}\r\n", data.len());
+    buf.extend_from_slice(data);
+    buf.extend_from_slice(b"\r\n");
+}
+```
+
+<Note>
+Kora stores heap strings as `Arc<[u8]>` (from `kora-core/src/types/value.rs:17`) so GET responses can reference the same allocation.
+</Note>
+
+## Inline Commands
+
+RESP parsers also support **inline commands** (space-delimited text) for `redis-cli` compatibility:
+
+```
+GET key\r\n
+```
+
+Parsed as:
+
+```rust
+RespValue::Array(Some(vec![
+    RespValue::BulkString(Some(b"GET".to_vec())),
+    RespValue::BulkString(Some(b"key".to_vec())),
+]))
+```
+
+Implementation:
+
+```rust
+// From kora-protocol/src/parser.rs:835
+fn parse_inline(data: &[u8]) -> Result<(RespValue, usize), ProtocolError> {
+    match find_crlf(data) {
+        Some(pos) => {
+            let line = &data[..pos];
+            let parts: Vec<&[u8]> = line
+                .split(|b| *b == b' ')
+                .filter(|p| !p.is_empty())
+                .collect();
+
+            if parts.is_empty() {
+                return Err(ProtocolError::InvalidData("empty inline command".into()));
+            }
+
+            let items: Vec<RespValue> = parts
+                .into_iter()
+                .map(|p| RespValue::BulkString(Some(p.to_vec())))
+                .collect();
+
+            Ok((RespValue::Array(Some(items)), pos + 2))
+        }
+        None => Err(ProtocolError::Incomplete),
+    }
+}
+```
+
+## Redis Compatibility
+
+### Supported Commands
+
+Kora implements **100+ Redis commands** across data types:
+
+| Category | Commands |
+|----------|----------|
+| **Strings** | GET, SET, GETSET, APPEND, STRLEN, INCR, DECR, INCRBY, DECRBY, MGET, MSET, SETNX |
+| **Keys** | DEL, EXISTS, EXPIRE, PEXPIRE, PERSIST, TTL, PTTL, TYPE, KEYS, SCAN, DBSIZE, FLUSHDB |
+| **Lists** | LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE, LINDEX |
+| **Hashes** | HSET, HGET, HDEL, HGETALL, HLEN, HEXISTS, HINCRBY |
+| **Sets** | SADD, SREM, SMEMBERS, SISMEMBER, SCARD |
+| **Server** | PING, ECHO, INFO, BGSAVE, BGREWRITEAOF, CONFIG GET/SET |
+
+Full list: `kora-protocol/src/command.rs`
+
+### Protocol Differences from Redis
+
+| Feature | Redis | Kora |
+|---------|-------|------|
+| **RESP2** | Full support | Full support |
+| **RESP3** | Full support | Parsing only (downgraded to RESP2 responses) |
+| **Pipelining** | Supported | Supported (batched per shard) |
+| **Pub/Sub** | Supported | Supported (via `kora-pubsub`) |
+| **Transactions** | MULTI/EXEC | Not supported |
+| **Lua scripting** | EVAL/EVALSHA | Not supported |
+| **Cluster protocol** | Supported | Not supported (use client-side sharding) |
+
+<Warning>
+Kora does **not support** Redis transactions (MULTI/EXEC) or Lua scripting. Multi-key operations are not atomic across shards.
+</Warning>
+
+## Client Compatibility
+
+Kora works out-of-the-box with any RESP2-compatible Redis client:
+
+### redis-cli
+
+```bash
+redis-cli -p 6379
+127.0.0.1:6379> SET greeting "hello world"
+OK
+127.0.0.1:6379> GET greeting
+"hello world"
+```
+
+### redis-rs (Rust)
+
+```rust
+use redis::Commands;
+
+let client = redis::Client::open("redis://127.0.0.1:6379/")?;
+let mut con = client.get_connection()?;
+con.set("greeting", "hello")?;
+let value: String = con.get("greeting")?;
+assert_eq!(value, "hello");
+```
+
+### ioredis (Node.js)
+
+```javascript
+const Redis = require('ioredis');
+const redis = new Redis({ port: 6379 });
+
+await redis.set('greeting', 'hello');
+const value = await redis.get('greeting');
+console.log(value); // "hello"
+```
+
+### Jedis (Java)
+
+```java
+import redis.clients.jedis.Jedis;
+
+Jedis jedis = new Jedis("localhost", 6379);
+jedis.set("greeting", "hello");
+String value = jedis.get("greeting");
+System.out.println(value); // "hello"
+```
+
+## Pipeline Support
+
+Kora batches pipelined commands per shard to reduce response-channel overhead:
+
+```rust
+// From kora-core/src/shard/engine.rs:149
+pub fn dispatch_batch_blocking(&self, commands: Vec<Command>) -> Vec<CommandResponse> {
+    // Group keyed commands by shard
+    let mut shard_batches: Vec<Vec<(usize, Command)>> = vec![Vec::new(); self.shard_count];
+    for (idx, command) in commands {
+        let Some(key) = command.key() else { continue };
+        let shard_id = shard_for_key(key, self.shard_count) as usize;
+        shard_batches[shard_id].push((idx, command));
+    }
+
+    // Send batches to each shard
+    for (shard_id, commands) in shard_batches {
+        self.workers[shard_id].tx.send(ShardMessage::Batch {
+            commands,
+            response_tx,
+        });
+    }
+    // Collect responses in original order
+}
+```
+
+**Performance:**
+
+| Pipeline Size | Without Batching | With Batching | Improvement |
+|---------------|------------------|---------------|-------------|
+| 10 commands | 10 × 2μs = 20μs | ~5μs | **4x** |
+| 100 commands | 100 × 2μs = 200μs | ~15μs | **13x** |
+
+## Error Handling
+
+### Protocol Errors
+
+```rust
+// From kora-protocol/src/error.rs
+pub enum ProtocolError {
+    /// Not enough bytes to parse a complete frame.
+    Incomplete,
+    /// Malformed RESP data.
+    InvalidData(String),
+    /// Unsupported command.
+    UnknownCommand(String),
+    /// Wrong number of arguments.
+    WrongArgc { expected: usize, got: usize },
+}
+```
+
+**Error responses:**
+
+```
+-ERR invalid bulk string length\r\n
+-ERR unknown command 'ZADD'\r\n
+-ERR wrong number of arguments for 'GET'\r\n
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="building" href="/concepts/architecture">
+    Learn about Kora's component architecture
+  </Card>
+  <Card title="Command Reference" icon="terminal" href="/api/string-commands">
+    Browse all supported Redis commands
+  </Card>
+</CardGroup>

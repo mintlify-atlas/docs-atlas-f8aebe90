@@ -1,0 +1,275 @@
+---
+title: Configuration
+description: Configure Kora through CLI arguments and TOML config files
+---
+
+Kora uses a layered configuration system with three levels of precedence:
+
+1. **Built-in defaults** — sensible values for single-node deployment
+2. **TOML config file** — persistent configuration loaded from disk
+3. **CLI arguments** — runtime overrides with highest precedence
+
+## Configuration Precedence
+
+Configuration sources are applied in order:
+
+```
+Built-in defaults → TOML file → CLI arguments
+                    (lowest)    (highest precedence)
+```
+
+CLI arguments always override TOML config values, which in turn override built-in defaults.
+
+## CLI Arguments
+
+Start Kora with command-line flags:
+
+```bash
+kora-cli \
+  --bind 0.0.0.0 \
+  --port 6379 \
+  --workers 8 \
+  --log-level info \
+  --password "s3cret" \
+  --data-dir /var/lib/kora \
+  --snapshot-interval-secs 300 \
+  --snapshot-retain 24 \
+  --cdc-capacity 65536 \
+  --metrics-port 9090 \
+  --unix-socket /tmp/kora.sock
+```
+
+### Network Options
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--bind` | string | `127.0.0.1` | Address to bind to |
+| `--port`, `-p` | u16 | `6379` | Port to listen on |
+| `--unix-socket` | string | none | Unix domain socket path |
+
+### Runtime Options
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--workers`, `-w` | usize | auto | Number of shard worker threads (defaults to CPU cores) |
+| `--log-level` | string | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
+| `--password` | string | none | AUTH password (requirepass equivalent) |
+
+### Persistence Options
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--data-dir` | string | none | Data directory for WAL, RDB, and cold storage |
+| `--snapshot-interval-secs` | u64 | none | Automatic RDB snapshot interval in seconds |
+| `--snapshot-retain` | usize | `24` | Number of timestamped snapshots to retain per shard |
+
+### Observability Options
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--metrics-port` | u16 | `0` | Prometheus metrics HTTP endpoint port (0 = disabled) |
+| `--cdc-capacity` | usize | `0` | CDC ring buffer capacity per shard (0 = disabled) |
+
+### Config File
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--config`, `-c` | path | `kora.toml` | Path to TOML config file |
+
+## TOML Config File
+
+Create a `kora.toml` file for persistent configuration:
+
+```toml
+# Network
+bind = "0.0.0.0"
+port = 6379
+unix_socket = "/tmp/kora.sock"
+
+# Runtime
+workers = 8
+log_level = "info"
+password = "s3cret"
+
+# Observability
+metrics_port = 9090
+cdc_capacity = 65536
+
+# Storage configuration
+[storage]
+data_dir = "/var/lib/kora"
+wal_sync = "every_second"        # every_write | every_second | os_managed
+wal_enabled = true
+rdb_enabled = true
+snapshot_interval_secs = 300
+snapshot_retain = 24
+wal_max_bytes = 67108864          # 64MB
+```
+
+### Storage Section
+
+The `[storage]` section configures persistence behavior:
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `data_dir` | string | none | Base directory for all persistent data |
+| `wal_sync` | string | `every_second` | WAL sync policy (see below) |
+| `wal_enabled` | bool | `true` | Enable write-ahead log |
+| `rdb_enabled` | bool | `true` | Enable RDB snapshots |
+| `snapshot_interval_secs` | u64 | none | Automatic snapshot interval |
+| `snapshot_retain` | usize | `24` | Snapshots to keep per shard |
+| `wal_max_bytes` | u64 | `67108864` | Max WAL size before rotation (64MB) |
+
+### WAL Sync Policies
+
+The `wal_sync` option controls durability vs. performance tradeoffs:
+
+| Policy | Description | Durability | Performance |
+|--------|-------------|------------|-------------|
+| `every_write` | fsync after every write | Highest | Lowest |
+| `every_second` | fsync once per second (default) | Medium | High |
+| `os_managed` | No explicit fsync (OS decides) | Lowest | Highest |
+
+**Recommendation:** Use `every_second` for most workloads. It provides good durability (1 second window) with minimal performance impact.
+
+## Configuration Examples
+
+### Minimal Config (Development)
+
+```toml
+port = 6379
+log_level = "debug"
+```
+
+### Production Config
+
+```toml
+bind = "0.0.0.0"
+port = 6379
+workers = 16
+log_level = "info"
+password = "${KORA_PASSWORD}"
+metrics_port = 9090
+
+[storage]
+data_dir = "/var/lib/kora"
+wal_sync = "every_second"
+snapshot_interval_secs = 300
+snapshot_retain = 48
+```
+
+### High-Throughput Config
+
+```toml
+bind = "0.0.0.0"
+port = 6379
+workers = 32                      # More workers for high core count
+log_level = "warn"
+
+[storage]
+data_dir = "/mnt/nvme/kora"
+wal_sync = "os_managed"           # Maximum throughput, less durability
+wal_max_bytes = 134217728         # 128MB WAL
+snapshot_interval_secs = 600      # Snapshot every 10 minutes
+```
+
+### Unix Socket Config
+
+```toml
+unix_socket = "/var/run/kora.sock"
+workers = 4
+
+[storage]
+data_dir = "/var/lib/kora"
+wal_sync = "every_second"
+```
+
+## Environment Variables
+
+Kora respects the `RUST_LOG` environment variable for fine-grained logging control:
+
+```bash
+RUST_LOG=kora_server=debug,kora_core=trace kora-cli --config kora.toml
+```
+
+This overrides the `log_level` setting in the config file.
+
+## Built-in Defaults
+
+When no config file exists and no CLI arguments are provided:
+
+| Setting | Default Value |
+|---------|---------------|
+| Bind address | `127.0.0.1` |
+| Port | `6379` |
+| Workers | CPU core count |
+| Log level | `info` |
+| Persistence | Disabled |
+| Password | None (no auth) |
+| Metrics port | `0` (disabled) |
+| CDC capacity | `0` (disabled) |
+
+These defaults are suitable for local development and testing.
+
+## Worker Count Tuning
+
+The `workers` option controls shard parallelism. Each worker runs an independent shard with its own data and I/O loop.
+
+**Guidelines:**
+
+- **Default (auto):** Set to `num_cpus::get()` — optimal for most workloads
+- **High core count:** Match physical cores (not hyperthreads) to avoid contention
+- **Low memory:** Reduce workers to decrease memory overhead (~2MB base per shard)
+- **NUMA systems:** Consider pinning workers to NUMA nodes (requires OS-level tuning)
+
+**Examples:**
+
+```bash
+# Let Kora auto-detect (recommended)
+kora-cli --port 6379
+
+# Explicit worker count
+kora-cli --workers 8 --port 6379
+
+# Single-threaded mode
+kora-cli --workers 1 --port 6379
+```
+
+## Data Directory Layout
+
+When `data_dir` is configured, Kora creates the following structure:
+
+```
+/var/lib/kora/
+├── shard-0/
+│   ├── wal-001.log
+│   ├── snapshot-20260310-120000.rdb
+│   └── snapshot-20260310-130000.rdb
+├── shard-1/
+│   ├── wal-001.log
+│   └── snapshot-20260310-120000.rdb
+└── ...
+```
+
+Each shard maintains independent WAL and RDB files.
+
+## Loading Config Files
+
+Kora looks for the config file in this order:
+
+1. Path specified by `--config` flag
+2. `kora.toml` in the current working directory
+3. If neither exists, use built-in defaults
+
+Missing config files are **silently ignored** — Kora will fall back to defaults.
+
+## Validation
+
+Kora validates configuration on startup and exits with an error if:
+
+- Port is already in use
+- Data directory is not writable
+- Invalid `wal_sync` value
+- Invalid `log_level` value
+
+Check the logs on startup to confirm configuration was loaded correctly.

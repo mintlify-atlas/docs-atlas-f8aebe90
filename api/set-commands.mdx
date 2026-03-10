@@ -1,0 +1,688 @@
+---
+title: Set Commands
+description: Commands for manipulating set data structures in Kora
+---
+
+Sets are unordered collections of unique strings. Kora supports all standard Redis set operations.
+
+## SADD
+
+Add one or more members to a set.
+
+**Syntax**
+```
+SADD key member [member ...]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+<ParamField path="member" type="string" required>
+  One or more members to add
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of members that were added to the set (not including members already present)
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "Hello"
+(integer) 1
+redis-cli> SADD myset "World"
+(integer) 1
+redis-cli> SADD myset "World"
+(integer) 0
+redis-cli> SMEMBERS myset
+1) "Hello"
+2) "World"
+```
+
+**Time complexity:** O(N) where N is the number of members to add
+
+---
+
+## SREM
+
+Remove one or more members from a set.
+
+**Syntax**
+```
+SREM key member [member ...]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+<ParamField path="member" type="string" required>
+  One or more members to remove
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of members that were removed from the set
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "one" "two" "three"
+(integer) 3
+redis-cli> SREM myset "one"
+(integer) 1
+redis-cli> SREM myset "four"
+(integer) 0
+redis-cli> SMEMBERS myset
+1) "two"
+2) "three"
+```
+
+**Time complexity:** O(N) where N is the number of members to remove
+
+---
+
+## SMEMBERS
+
+Get all members of a set.
+
+**Syntax**
+```
+SMEMBERS key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+**Return value**
+
+<ResponseField name="members" type="array">
+  Array of all members in the set
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "Hello" "World"
+(integer) 2
+redis-cli> SMEMBERS myset
+1) "Hello"
+2) "World"
+```
+
+**Time complexity:** O(N) where N is the set cardinality
+
+---
+
+## SISMEMBER
+
+Determine if a member exists in a set.
+
+**Syntax**
+```
+SISMEMBER key member
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+<ParamField path="member" type="string" required>
+  The member to check
+</ParamField>
+
+**Return value**
+
+<ResponseField name="exists" type="integer">
+  1 if the member exists in the set, 0 otherwise
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "one"
+(integer) 1
+redis-cli> SISMEMBER myset "one"
+(integer) 1
+redis-cli> SISMEMBER myset "two"
+(integer) 0
+```
+
+**Time complexity:** O(1)
+
+---
+
+## SCARD
+
+Get the number of members in a set.
+
+**Syntax**
+```
+SCARD key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+**Return value**
+
+<ResponseField name="cardinality" type="integer">
+  The cardinality (number of members) of the set, or 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "Hello" "World"
+(integer) 2
+redis-cli> SCARD myset
+(integer) 2
+```
+
+**Time complexity:** O(1)
+
+---
+
+## SPOP
+
+Remove and return one or multiple random members from a set.
+
+**Syntax**
+```
+SPOP key [count]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+<ParamField path="count" type="integer">
+  Number of members to pop
+</ParamField>
+
+**Return value**
+
+<ResponseField name="members" type="string | array | null">
+  Without count: a single member, or null if the set is empty. With count: array of popped members
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "one" "two" "three"
+(integer) 3
+redis-cli> SPOP myset
+"two"
+redis-cli> SMEMBERS myset
+1) "one"
+2) "three"
+redis-cli> SPOP myset 2
+1) "three"
+2) "one"
+```
+
+**Time complexity:** O(N) where N is the number of members to pop
+
+---
+
+## SRANDMEMBER
+
+Get one or multiple random members from a set.
+
+**Syntax**
+```
+SRANDMEMBER key [count]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+<ParamField path="count" type="integer">
+  Number of members to return (negative values allow duplicates)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="members" type="string | array | null">
+  Without count: a single random member, or null if the set is empty. With count: array of random members
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "one" "two" "three"
+(integer) 3
+redis-cli> SRANDMEMBER myset
+"one"
+redis-cli> SRANDMEMBER myset 2
+1) "three"
+2) "two"
+redis-cli> SRANDMEMBER myset -5
+1) "one"
+2) "two"
+3) "three"
+4) "one"
+5) "two"
+```
+
+**Time complexity:** O(N) where N is the number of members returned
+
+---
+
+## SUNION
+
+Get the union of multiple sets.
+
+**Syntax**
+```
+SUNION key [key ...]
+```
+
+<ParamField path="key" type="string" required>
+  One or more set keys
+</ParamField>
+
+**Return value**
+
+<ResponseField name="members" type="array">
+  Array of members in the union
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD set1 "a" "b" "c"
+(integer) 3
+redis-cli> SADD set2 "c" "d" "e"
+(integer) 3
+redis-cli> SUNION set1 set2
+1) "a"
+2) "b"
+3) "c"
+4) "d"
+5) "e"
+```
+
+**Time complexity:** O(N) where N is the total number of members in all given sets
+
+---
+
+## SUNIONSTORE
+
+Store the union of multiple sets in a new set.
+
+**Syntax**
+```
+SUNIONSTORE destination key [key ...]
+```
+
+<ParamField path="destination" type="string" required>
+  The key where the result will be stored
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  One or more source set keys
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of members in the resulting set
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD set1 "a" "b" "c"
+(integer) 3
+redis-cli> SADD set2 "c" "d" "e"
+(integer) 3
+redis-cli> SUNIONSTORE out set1 set2
+(integer) 5
+redis-cli> SMEMBERS out
+1) "a"
+2) "b"
+3) "c"
+4) "d"
+5) "e"
+```
+
+**Time complexity:** O(N) where N is the total number of members in all given sets
+
+---
+
+## SINTER
+
+Get the intersection of multiple sets.
+
+**Syntax**
+```
+SINTER key [key ...]
+```
+
+<ParamField path="key" type="string" required>
+  One or more set keys
+</ParamField>
+
+**Return value**
+
+<ResponseField name="members" type="array">
+  Array of members in the intersection
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD set1 "a" "b" "c"
+(integer) 3
+redis-cli> SADD set2 "b" "c" "d"
+(integer) 3
+redis-cli> SINTER set1 set2
+1) "b"
+2) "c"
+```
+
+**Time complexity:** O(N*M) where N is the cardinality of the smallest set and M is the number of sets
+
+---
+
+## SINTERSTORE
+
+Store the intersection of multiple sets in a new set.
+
+**Syntax**
+```
+SINTERSTORE destination key [key ...]
+```
+
+<ParamField path="destination" type="string" required>
+  The key where the result will be stored
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  One or more source set keys
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of members in the resulting set
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD set1 "a" "b" "c"
+(integer) 3
+redis-cli> SADD set2 "b" "c" "d"
+(integer) 3
+redis-cli> SINTERSTORE out set1 set2
+(integer) 2
+redis-cli> SMEMBERS out
+1) "b"
+2) "c"
+```
+
+**Time complexity:** O(N*M) where N is the cardinality of the smallest set and M is the number of sets
+
+---
+
+## SDIFF
+
+Get the difference of multiple sets.
+
+**Syntax**
+```
+SDIFF key [key ...]
+```
+
+<ParamField path="key" type="string" required>
+  One or more set keys (first key is the base set)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="members" type="array">
+  Array of members in the difference (members in the first set that are not in subsequent sets)
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD set1 "a" "b" "c"
+(integer) 3
+redis-cli> SADD set2 "b" "c" "d"
+(integer) 3
+redis-cli> SDIFF set1 set2
+1) "a"
+```
+
+**Time complexity:** O(N) where N is the total number of members in all sets
+
+---
+
+## SDIFFSTORE
+
+Store the difference of multiple sets in a new set.
+
+**Syntax**
+```
+SDIFFSTORE destination key [key ...]
+```
+
+<ParamField path="destination" type="string" required>
+  The key where the result will be stored
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  One or more source set keys
+</ParamField>
+
+**Return value**
+
+<ResponseField name="count" type="integer">
+  The number of members in the resulting set
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD set1 "a" "b" "c"
+(integer) 3
+redis-cli> SADD set2 "b" "c" "d"
+(integer) 3
+redis-cli> SDIFFSTORE out set1 set2
+(integer) 1
+redis-cli> SMEMBERS out
+1) "a"
+```
+
+**Time complexity:** O(N) where N is the total number of members in all sets
+
+---
+
+## SINTERCARD
+
+Get the cardinality of the intersection of multiple sets.
+
+**Syntax**
+```
+SINTERCARD numkeys key [key ...] [LIMIT limit]
+```
+
+<ParamField path="numkeys" type="integer" required>
+  The number of keys to follow
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  One or more set keys
+</ParamField>
+
+<ParamField path="LIMIT" type="integer">
+  Stop counting once this limit is reached
+</ParamField>
+
+**Return value**
+
+<ResponseField name="cardinality" type="integer">
+  The cardinality of the intersection
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD set1 "a" "b" "c" "d"
+(integer) 4
+redis-cli> SADD set2 "b" "c" "d" "e"
+(integer) 4
+redis-cli> SINTERCARD 2 set1 set2
+(integer) 3
+redis-cli> SINTERCARD 2 set1 set2 LIMIT 2
+(integer) 2
+```
+
+**Time complexity:** O(N*M) where N is the cardinality of the smallest set and M is the number of sets
+
+---
+
+## SMOVE
+
+Move a member from one set to another.
+
+**Syntax**
+```
+SMOVE source destination member
+```
+
+<ParamField path="source" type="string" required>
+  The source set key
+</ParamField>
+
+<ParamField path="destination" type="string" required>
+  The destination set key
+</ParamField>
+
+<ParamField path="member" type="string" required>
+  The member to move
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the member was moved, 0 if the member does not exist in the source set
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "one" "two"
+(integer) 2
+redis-cli> SADD myotherset "three"
+(integer) 1
+redis-cli> SMOVE myset myotherset "two"
+(integer) 1
+redis-cli> SMEMBERS myset
+1) "one"
+redis-cli> SMEMBERS myotherset
+1) "two"
+2) "three"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## SMISMEMBER
+
+Check if multiple members exist in a set.
+
+**Syntax**
+```
+SMISMEMBER key member [member ...]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+<ParamField path="member" type="string" required>
+  One or more members to check
+</ParamField>
+
+**Return value**
+
+<ResponseField name="results" type="array">
+  Array of integers (1 if exists, 0 if not), one for each member in the same order
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset "one" "two"
+(integer) 2
+redis-cli> SMISMEMBER myset "one" "two" "three"
+1) (integer) 1
+2) (integer) 1
+3) (integer) 0
+```
+
+**Time complexity:** O(N) where N is the number of members to check
+
+---
+
+## SSCAN
+
+Incrementally iterate set members.
+
+**Syntax**
+```
+SSCAN key cursor [MATCH pattern] [COUNT count]
+```
+
+<ParamField path="key" type="string" required>
+  The key of the set
+</ParamField>
+
+<ParamField path="cursor" type="integer" required>
+  The cursor position (use 0 to start)
+</ParamField>
+
+<ParamField path="MATCH" type="string">
+  Glob pattern to filter members
+</ParamField>
+
+<ParamField path="COUNT" type="integer">
+  Hint for how many members to return
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="array">
+  Array with two elements: [0] next cursor, [1] array of members
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SADD myset a b c d e f
+(integer) 6
+redis-cli> SSCAN myset 0 MATCH a* COUNT 5
+1) "0"
+2) 1) "a"
+```
+
+**Time complexity:** O(1) for every call, O(N) for a complete iteration
+
+---
+
+## Redis Compatibility
+
+Kora implements all standard Redis set commands with identical semantics.

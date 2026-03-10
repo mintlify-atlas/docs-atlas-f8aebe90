@@ -1,0 +1,407 @@
+---
+title: Change Data Capture
+description: Stream database mutations with cursor-based subscriptions and consumer groups
+---
+
+Kora's Change Data Capture (CDC) system records every mutation in a per-shard ring buffer, enabling downstream consumers to subscribe to real-time change streams with at-least-once delivery guarantees.
+
+## Overview
+
+From `kora-cdc/src/lib.rs:1-17`:
+
+> Every write operation in a Kōra shard is recorded as a `CdcEvent` in a fixed-size, per-shard ring buffer. Downstream consumers read these events through cursor-tracked subscriptions or through consumer groups that provide at-least-once delivery with acknowledgement tracking.
+
+### Features
+
+- **Per-shard ring buffers** with configurable capacity
+- **Monotonic sequence numbers** for ordered event delivery
+- **Cursor-based subscriptions** with gap detection
+- **Consumer groups** for distributed processing
+- **Glob-pattern filtering** to subscribe to specific keys
+- **Pending entry tracking** with acknowledgement
+
+## Architecture
+
+<Steps>
+  <Step title="Write Path">
+    Every mutation (SET, DEL, LPUSH, etc.) generates a `CdcEvent` with a unique sequence number and is appended to the shard's ring buffer.
+  </Step>
+  
+  <Step title="Ring Buffer">
+    Fixed-capacity circular buffer that overwrites oldest events when full. Consumers detect gaps through sequence number checks.
+  </Step>
+  
+  <Step title="Subscription">
+    Consumers track their position with a cursor (sequence number) and poll for new events in batches.
+  </Step>
+  
+  <Step title="Acknowledgement">
+    Consumer groups track pending entries and require explicit ACKs to advance the group cursor.
+  </Step>
+</Steps>
+
+## Event Types
+
+From `kora-cdc/src/ring.rs:8-27`:
+
+```rust
+pub enum CdcOp {
+    Set,      // A string key was created or overwritten
+    Del,      // A key was explicitly deleted
+    Expire,   // A key was removed by TTL expiration
+    HSet,     // A field was set inside a hash
+    LPush,    // A value was pushed to the head of a list
+    RPush,    // A value was pushed to the tail of a list
+    SAdd,     // A member was added to a set
+    FlushDb,  // The entire database was flushed
+}
+```
+
+## Simple Polling
+
+### CDCPOLL Command
+
+The simplest way to consume CDC events is direct polling:
+
+```bash
+# Poll from sequence 0, get up to 100 events
+CDCPOLL 0 100
+```
+
+**Response format**:
+
+```json
+[
+  [
+    12345,              // sequence number
+    1678901234567,      // timestamp (ms)
+    "Set",              // operation type
+    "user:1000",        // key
+    "{\"name\":\"Alice\"}"  // value (if applicable)
+  ],
+  [...]
+]
+```
+
+### Cursor Tracking
+
+```bash
+# First poll
+result = CDCPOLL 0 100
+last_seq = result[-1][0]  # Get last sequence number
+
+# Next poll (continue from where we left off)
+CDCPOLL (last_seq + 1) 100
+```
+
+<Warning>
+  If the cursor is behind the ring buffer's `start_seq`, you'll receive events starting from the earliest available sequence. Check for gaps by comparing returned sequence numbers.
+</Warning>
+
+## Consumer Groups
+
+Consumer groups provide distributed, at-least-once event processing with automatic redelivery.
+
+### Create a Group
+
+```bash
+# Create group starting at sequence 0
+CDC.GROUP CREATE stream:mutations mygroup 0
+
+# Create group starting at latest
+CDC.GROUP CREATE stream:mutations backfill $
+```
+
+<ParamField path="key" type="string" required>
+  Stream key name (arbitrary identifier)
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name
+</ParamField>
+
+<ParamField path="start_seq" type="integer" required>
+  Starting sequence number, or `$` for latest
+</ParamField>
+
+### Read from Group
+
+```bash
+# Consumer 'worker-1' reads 10 events
+CDC.GROUP READ stream:mutations mygroup worker-1 10
+```
+
+Events returned are marked as **pending** until acknowledged.
+
+### Acknowledge Events
+
+```bash
+# Acknowledge specific sequences
+CDC.ACK stream:mutations mygroup 12345 12346 12347
+# => 3 (number acknowledged)
+```
+
+### Check Pending
+
+```bash
+# List pending entries
+CDC.PENDING stream:mutations mygroup
+```
+
+**Response**:
+
+```json
+[
+  [12348, "worker-1", 30000],  // [seq, consumer, idle_time_ms]
+  [12349, "worker-1", 30000],
+  [12350, "worker-2", 5000]
+]
+```
+
+## Pattern Filtering
+
+From `kora-cdc/src/subscription.rs`, subscriptions support glob-style patterns:
+
+```bash
+# Subscribe to all user keys
+pattern = "user:*"
+
+# Subscribe to specific shard
+pattern = "shard:0:*"
+
+# Subscribe to session keys in a namespace
+pattern = "app:session:*"
+```
+
+<Note>
+  Pattern matching uses byte-level glob matching with `*` and `?` wildcards. Filtering happens after events are retrieved from the ring buffer.
+</Note>
+
+## Event Structure
+
+From `kora-cdc/src/ring.rs:34-46`:
+
+```rust
+pub struct CdcEvent {
+    /// Unique, monotonically increasing sequence number
+    pub seq: u64,
+    /// Wall-clock timestamp in milliseconds
+    pub timestamp_ms: u64,
+    /// The kind of mutation that occurred
+    pub op: CdcOp,
+    /// The affected key (empty for FlushDb)
+    pub key: Vec<u8>,
+    /// The new value, when applicable
+    pub value: Option<Vec<u8>>,
+}
+```
+
+## Ring Buffer Internals
+
+From `kora-cdc/src/ring.rs:56-104`:
+
+```rust
+pub struct CdcRing {
+    buffer: Vec<Option<CdcEvent>>,
+    capacity: usize,
+    write_seq: u64,   // Next sequence to write
+    start_seq: u64,   // Earliest available sequence
+}
+
+pub fn push(&mut self, op: CdcOp, key: Vec<u8>, value: Option<Vec<u8>>, timestamp_ms: u64) {
+    let seq = self.write_seq;
+    let idx = (seq as usize) % self.capacity;
+    
+    self.buffer[idx] = Some(CdcEvent { seq, timestamp_ms, op, key, value });
+    self.write_seq += 1;
+    
+    // Update start_seq when buffer wraps
+    if self.write_seq > self.capacity as u64 {
+        self.start_seq = self.write_seq - self.capacity as u64;
+    }
+}
+```
+
+<Accordion title="Why a ring buffer?">
+  Ring buffers provide:
+  
+  - **Bounded memory**: Fixed size regardless of event volume
+  - **O(1) writes**: No allocation or compaction
+  - **Automatic cleanup**: Old events are overwritten
+  - **Gap detection**: Consumers know when they fall behind
+  
+  Trade-off: Slow consumers may miss events. Size the buffer based on expected event rate and consumer lag tolerance.
+</Accordion>
+
+## Gap Detection
+
+From `kora-cdc/src/ring.rs:131-149`:
+
+```rust
+pub fn read(&self, from_seq: u64, limit: usize) -> CdcReadResult {
+    if from_seq >= self.write_seq {
+        return CdcReadResult {
+            events: vec![],
+            next_seq: self.write_seq,
+            gap: false,
+        };
+    }
+    
+    let actual_start = if from_seq < self.start_seq {
+        self.start_seq  // Consumer fell behind
+    } else {
+        from_seq
+    };
+    
+    let gap = from_seq < self.start_seq;
+    // ...
+}
+```
+
+**Gap handling**:
+
+```bash
+result = CDCPOLL cursor 100
+
+if result.gap:
+    # Detected missed events
+    log.warn(f"CDC gap detected, missed events before seq {result.next_seq}")
+    # Re-sync from snapshot or accept data loss
+```
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Cache Invalidation" icon="rotate">
+    Invalidate downstream caches when keys change.
+    
+    ```bash
+    CDC.GROUP CREATE mutations cache-invalidator 0
+    # Worker invalidates CDN/browser caches
+    ```
+  </Card>
+  
+  <Card title="Search Index Sync" icon="magnifying-glass">
+    Keep search indexes (Elasticsearch, Meilisearch) in sync.
+    
+    ```bash
+    CDC.GROUP CREATE mutations search-indexer 0
+    # Worker pushes docs to search engine
+    ```
+  </Card>
+  
+  <Card title="Audit Logs" icon="scroll">
+    Record all mutations for compliance.
+    
+    ```bash
+    CDCPOLL 0 1000
+    # Archive to S3/BigQuery
+    ```
+  </Card>
+  
+  <Card title="Replication" icon="copy">
+    Replicate changes to secondary data stores.
+    
+    ```bash
+    CDC.GROUP CREATE mutations replicator 0
+    # Worker writes to PostgreSQL/MySQL
+    ```
+  </Card>
+</CardGroup>
+
+## Configuration
+
+### Ring Buffer Size
+
+Configure per-shard buffer capacity based on write rate and consumer lag:
+
+```rust
+// In kora-cdc/src/ring.rs
+let ring = CdcRing::new(capacity);
+```
+
+**Sizing formula**:
+
+```
+capacity = write_rate × max_acceptable_lag
+
+Example:
+  1000 writes/sec × 60 sec lag tolerance = 60,000 events
+```
+
+### Consumer Timeouts
+
+Consumer groups track idle time for pending entries. Redelivery after timeout:
+
+```bash
+# Check pending with idle time
+CDC.PENDING stream:mutations mygroup
+# => [[12345, "worker-1", 120000]]  # 120 seconds idle
+
+# Claim stale entries
+# (Implementation varies by client library)
+```
+
+## Performance Tips
+
+<AccordionGroup>
+  <Accordion title="Batch reads for throughput">
+    ```bash
+    # Good: batch of 1000
+    CDCPOLL cursor 1000
+    
+    # Bad: one at a time
+    CDCPOLL cursor 1
+    ```
+  </Accordion>
+  
+  <Accordion title="Use consumer groups for fan-out">
+    Multiple workers in the same group share the load:
+    
+    ```bash
+    # Worker 1
+    CDC.GROUP READ stream:mutations mygroup worker-1 100
+    
+    # Worker 2 (gets different events)
+    CDC.GROUP READ stream:mutations mygroup worker-2 100
+    ```
+  </Accordion>
+  
+  <Accordion title="Filter on consumer side">
+    Ring buffer stores all events. Apply pattern/field filters in your consumer:
+    
+    ```python
+    events = cdc_poll(cursor, 1000)
+    user_events = [e for e in events if e['key'].startswith(b'user:')]
+    ```
+  </Accordion>
+  
+  <Accordion title="Monitor lag with metrics">
+    Track consumer lag:
+    
+    ```python
+    current_write_seq = ring.write_seq()
+    consumer_lag = current_write_seq - consumer_cursor
+    
+    if consumer_lag > threshold:
+        alert("CDC consumer falling behind")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Pub/Sub" icon="broadcast-tower" href="/features/pubsub">
+    Push-mode messaging for real-time notifications
+  </Card>
+  <Card title="Persistence" icon="database" href="/features/persistence">
+    Configure WAL for durability
+  </Card>
+  <Card title="Document Database" icon="file-alt" href="/features/document-database">
+    Stream JSON document changes
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/cdc-commands">
+    Complete CDC.* command reference
+  </Card>
+</CardGroup>

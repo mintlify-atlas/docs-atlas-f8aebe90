@@ -1,0 +1,720 @@
+---
+title: String Commands
+description: Commands for manipulating string values in Kora
+---
+
+String commands operate on key-value pairs where the value is a byte string. Kora supports all standard Redis string operations with identical semantics.
+
+## GET
+
+Get the value of a key.
+
+**Syntax**
+```
+GET key
+```
+
+<ParamField path="key" type="string" required>
+  The key to retrieve
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="string | null">
+  The value stored at the key, or null if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> GET mykey
+"Hello"
+redis-cli> GET nonexistent
+(nil)
+```
+
+**Time complexity:** O(1)
+
+---
+
+## SET
+
+Set the value of a key with optional expiration and conditional flags.
+
+**Syntax**
+```
+SET key value [EX seconds] [PX milliseconds] [NX|XX]
+```
+
+<ParamField path="key" type="string" required>
+  The key to set
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to store
+</ParamField>
+
+<ParamField path="EX" type="integer">
+  Set the key's time to live in seconds
+</ParamField>
+
+<ParamField path="PX" type="integer">
+  Set the key's time to live in milliseconds
+</ParamField>
+
+<ParamField path="NX" type="flag">
+  Only set the key if it does not already exist
+</ParamField>
+
+<ParamField path="XX" type="flag">
+  Only set the key if it already exists
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string | null">
+  OK if SET was executed correctly, or null if the SET operation was not performed due to NX or XX conditions
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> SET mykey "World" EX 10
+OK
+redis-cli> SET newkey "value" NX
+OK
+redis-cli> SET newkey "value2" NX
+(nil)
+```
+
+**Time complexity:** O(1)
+
+---
+
+## APPEND
+
+Append a value to a key.
+
+**Syntax**
+```
+APPEND key value
+```
+
+<ParamField path="key" type="string" required>
+  The key to append to
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to append
+</ParamField>
+
+**Return value**
+
+<ResponseField name="length" type="integer">
+  The length of the string after the append operation
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> APPEND mykey " World"
+(integer) 11
+redis-cli> GET mykey
+"Hello World"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## STRLEN
+
+Get the length of the value stored in a key.
+
+**Syntax**
+```
+STRLEN key
+```
+
+<ParamField path="key" type="string" required>
+  The key to measure
+</ParamField>
+
+**Return value**
+
+<ResponseField name="length" type="integer">
+  The length of the string, or 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello World"
+OK
+redis-cli> STRLEN mykey
+(integer) 11
+redis-cli> STRLEN nonexistent
+(integer) 0
+```
+
+**Time complexity:** O(1)
+
+---
+
+## INCR
+
+Increment the integer value of a key by one.
+
+**Syntax**
+```
+INCR key
+```
+
+<ParamField path="key" type="string" required>
+  The key containing an integer value
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="integer">
+  The value of the key after incrementing
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET counter "10"
+OK
+redis-cli> INCR counter
+(integer) 11
+redis-cli> INCR counter
+(integer) 12
+redis-cli> INCR newcounter
+(integer) 1
+```
+
+**Time complexity:** O(1)
+
+---
+
+## DECR
+
+Decrement the integer value of a key by one.
+
+**Syntax**
+```
+DECR key
+```
+
+<ParamField path="key" type="string" required>
+  The key containing an integer value
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="integer">
+  The value of the key after decrementing
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET counter "10"
+OK
+redis-cli> DECR counter
+(integer) 9
+redis-cli> DECR counter
+(integer) 8
+```
+
+**Time complexity:** O(1)
+
+---
+
+## INCRBY
+
+Increment the integer value of a key by a given amount.
+
+**Syntax**
+```
+INCRBY key delta
+```
+
+<ParamField path="key" type="string" required>
+  The key containing an integer value
+</ParamField>
+
+<ParamField path="delta" type="integer" required>
+  The amount to increment by
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="integer">
+  The value of the key after incrementing
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET counter "10"
+OK
+redis-cli> INCRBY counter 5
+(integer) 15
+redis-cli> INCRBY counter -3
+(integer) 12
+```
+
+**Time complexity:** O(1)
+
+---
+
+## DECRBY
+
+Decrement the integer value of a key by a given amount.
+
+**Syntax**
+```
+DECRBY key delta
+```
+
+<ParamField path="key" type="string" required>
+  The key containing an integer value
+</ParamField>
+
+<ParamField path="delta" type="integer" required>
+  The amount to decrement by
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="integer">
+  The value of the key after decrementing
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET counter "10"
+OK
+redis-cli> DECRBY counter 3
+(integer) 7
+```
+
+**Time complexity:** O(1)
+
+---
+
+## INCRBYFLOAT
+
+Increment the float value of a key by a given amount.
+
+**Syntax**
+```
+INCRBYFLOAT key delta
+```
+
+<ParamField path="key" type="string" required>
+  The key containing a numeric value
+</ParamField>
+
+<ParamField path="delta" type="float" required>
+  The amount to increment by
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="float">
+  The value of the key after incrementing
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET price "10.50"
+OK
+redis-cli> INCRBYFLOAT price 2.25
+"12.75"
+redis-cli> INCRBYFLOAT price -1.5
+"11.25"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## MGET
+
+Get the values of all given keys.
+
+**Syntax**
+```
+MGET key [key ...]
+```
+
+<ParamField path="key" type="string" required>
+  One or more keys to retrieve
+</ParamField>
+
+**Return value**
+
+<ResponseField name="values" type="array">
+  Array of values at the specified keys. For keys that do not exist, null is returned
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET key1 "Hello"
+OK
+redis-cli> SET key2 "World"
+OK
+redis-cli> MGET key1 key2 nonexistent
+1) "Hello"
+2) "World"
+3) (nil)
+```
+
+**Time complexity:** O(N) where N is the number of keys to retrieve
+
+---
+
+## MSET
+
+Set multiple keys to multiple values.
+
+**Syntax**
+```
+MSET key value [key value ...]
+```
+
+<ParamField path="key" type="string" required>
+  A key to set
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value for the corresponding key
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  Always returns OK
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> MSET key1 "Hello" key2 "World"
+OK
+redis-cli> GET key1
+"Hello"
+redis-cli> GET key2
+"World"
+```
+
+**Time complexity:** O(N) where N is the number of keys to set
+
+---
+
+## SETNX
+
+Set the value of a key only if it does not exist.
+
+**Syntax**
+```
+SETNX key value
+```
+
+<ParamField path="key" type="string" required>
+  The key to set
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to store
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the key was set, 0 if the key was not set
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SETNX mykey "Hello"
+(integer) 1
+redis-cli> SETNX mykey "World"
+(integer) 0
+redis-cli> GET mykey
+"Hello"
+```
+
+**Time complexity:** O(1)
+
+---
+
+## GETSET
+
+Set the string value of a key and return its old value.
+
+**Syntax**
+```
+GETSET key value
+```
+
+<ParamField path="key" type="string" required>
+  The key to set
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The new value
+</ParamField>
+
+**Return value**
+
+<ResponseField name="old_value" type="string | null">
+  The previous value stored at key, or null if the key did not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> GETSET mykey "World"
+"Hello"
+redis-cli> GET mykey
+"World"
+```
+
+**Time complexity:** O(1)
+
+**Note:** GETSET is deprecated. Use SET with the GET option instead.
+
+---
+
+## GETRANGE
+
+Get a substring of the string stored at a key.
+
+**Syntax**
+```
+GETRANGE key start end
+```
+
+<ParamField path="key" type="string" required>
+  The key containing the string
+</ParamField>
+
+<ParamField path="start" type="integer" required>
+  The start offset (0-based, negative values count from the end)
+</ParamField>
+
+<ParamField path="end" type="integer" required>
+  The end offset (inclusive, negative values count from the end)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="substring" type="string">
+  The substring of the value
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "This is a string"
+OK
+redis-cli> GETRANGE mykey 0 3
+"This"
+redis-cli> GETRANGE mykey -3 -1
+"ing"
+redis-cli> GETRANGE mykey 0 -1
+"This is a string"
+```
+
+**Time complexity:** O(N) where N is the length of the returned string
+
+---
+
+## SETRANGE
+
+Overwrite part of a string at a key starting at the specified offset.
+
+**Syntax**
+```
+SETRANGE key offset value
+```
+
+<ParamField path="key" type="string" required>
+  The key to modify
+</ParamField>
+
+<ParamField path="offset" type="integer" required>
+  The byte offset to start writing at
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value to write
+</ParamField>
+
+**Return value**
+
+<ResponseField name="length" type="integer">
+  The length of the string after the modification
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET key1 "Hello World"
+OK
+redis-cli> SETRANGE key1 6 "Kora"
+(integer) 11
+redis-cli> GET key1
+"Hello Kora!"
+```
+
+**Time complexity:** O(1) not counting the time to copy the new string in place
+
+---
+
+## GETDEL
+
+Get the value of a key and delete the key.
+
+**Syntax**
+```
+GETDEL key
+```
+
+<ParamField path="key" type="string" required>
+  The key to get and delete
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="string | null">
+  The value of the key, or null if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> GETDEL mykey
+"Hello"
+redis-cli> GET mykey
+(nil)
+```
+
+**Time complexity:** O(1)
+
+---
+
+## GETEX
+
+Get the value of a key and optionally set its expiration.
+
+**Syntax**
+```
+GETEX key [EX seconds | PX milliseconds | EXAT timestamp | PXAT timestamp_ms | PERSIST]
+```
+
+<ParamField path="key" type="string" required>
+  The key to get
+</ParamField>
+
+<ParamField path="EX" type="integer">
+  Set the key's time to live in seconds
+</ParamField>
+
+<ParamField path="PX" type="integer">
+  Set the key's time to live in milliseconds
+</ParamField>
+
+<ParamField path="EXAT" type="integer">
+  Set the key to expire at a Unix timestamp (seconds)
+</ParamField>
+
+<ParamField path="PXAT" type="integer">
+  Set the key to expire at a Unix timestamp (milliseconds)
+</ParamField>
+
+<ParamField path="PERSIST" type="flag">
+  Remove the time to live associated with the key
+</ParamField>
+
+**Return value**
+
+<ResponseField name="value" type="string | null">
+  The value of the key, or null if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> SET mykey "Hello"
+OK
+redis-cli> GETEX mykey EX 60
+"Hello"
+redis-cli> TTL mykey
+(integer) 60
+```
+
+**Time complexity:** O(1)
+
+---
+
+## MSETNX
+
+Set multiple keys to multiple values, only if none of the keys exist.
+
+**Syntax**
+```
+MSETNX key value [key value ...]
+```
+
+<ParamField path="key" type="string" required>
+  A key to set
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The value for the corresponding key
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if all keys were set, 0 if no key was set (at least one key already existed)
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> MSETNX key1 "Hello" key2 "World"
+(integer) 1
+redis-cli> MSETNX key1 "foo" key3 "bar"
+(integer) 0
+redis-cli> MGET key1 key2 key3
+1) "Hello"
+2) "World"
+3) (nil)
+```
+
+**Time complexity:** O(N) where N is the number of keys to set
+
+---
+
+## Redis Compatibility
+
+Kora implements all standard Redis string commands with identical semantics. Commands behave exactly as documented in the Redis specification.

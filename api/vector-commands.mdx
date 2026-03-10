@@ -1,0 +1,256 @@
+---
+title: Vector Commands
+description: Vector similarity search commands in Kora
+---
+
+Kora provides approximate nearest neighbor search using HNSW (Hierarchical Navigable Small World) indexes. Vectors support cosine similarity, L2 distance, and inner product metrics.
+
+## VECSET
+
+Store a vector in the index.
+
+**Syntax**
+```
+VECSET key dim v1 v2 v3 ...
+```
+
+<ParamField path="key" type="string" required>
+  The key to store the vector under
+</ParamField>
+
+<ParamField path="dim" type="integer" required>
+  The dimensionality of the vector
+</ParamField>
+
+<ParamField path="v1 v2 ..." type="float[]" required>
+  The vector components (must match dim count)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the vector was stored successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> VECSET vec:1 3 1.0 0.5 0.8
+OK
+redis-cli> VECSET vec:2 3 0.9 0.6 0.7
+OK
+redis-cli> VECSET embedding:product:123 128 0.1 0.2 0.3 ...
+OK
+```
+
+**Time complexity:** O(M log N) where N is the number of vectors and M is the connectivity parameter
+
+**Notes:**
+- Vectors are automatically normalized for cosine similarity
+- All vectors in an index must have the same dimensionality
+- The first VECSET determines the dimension for subsequent inserts
+
+---
+
+## VECQUERY
+
+Find the K nearest neighbors to a query vector.
+
+**Syntax**
+```
+VECQUERY key k v1 v2 v3 ...
+```
+
+<ParamField path="key" type="string" required>
+  The index key pattern or base key
+</ParamField>
+
+<ParamField path="k" type="integer" required>
+  Number of nearest neighbors to return
+</ParamField>
+
+<ParamField path="v1 v2 ..." type="float[]" required>
+  The query vector components
+</ParamField>
+
+**Return value**
+
+<ResponseField name="results" type="array">
+  Array of (key, distance) pairs, sorted by distance
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> VECQUERY index 5 1.0 0.5 0.8
+1) "vec:2"
+2) "0.0523"
+3) "vec:1"
+4) "0.1247"
+5) "vec:5"
+6) "0.2891"
+7) "vec:3"
+8) "0.3456"
+9) "vec:7"
+10) "0.4123"
+```
+
+**Time complexity:** O(ef * log N) where ef is the search width parameter and N is index size
+
+**Notes:**
+- Returns up to k results (may be fewer if index has fewer vectors)
+- Distances are cosine distances (lower is more similar)
+- Query vector is automatically normalized
+
+---
+
+## VECDEL
+
+Delete a vector from the index.
+
+**Syntax**
+```
+VECDEL key
+```
+
+<ParamField path="key" type="string" required>
+  The key of the vector to delete
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the vector was deleted, 0 if it did not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> VECDEL vec:1
+(integer) 1
+redis-cli> VECDEL vec:99
+(integer) 0
+```
+
+**Time complexity:** O(M log N) where N is the number of vectors and M is the connectivity parameter
+
+---
+
+## Configuration
+
+### HNSW Parameters
+
+The HNSW index is configured with the following default parameters:
+
+- **M (connectivity):** 16 - Number of bi-directional links per node
+- **ef_construction:** 200 - Search width during index construction
+- **ef_search:** 100 - Search width during query (configurable per query)
+
+### Distance Metrics
+
+Kora supports three distance metrics:
+
+1. **Cosine Similarity (default)**
+   - Measures angular similarity between vectors
+   - Range: [0, 2] where 0 is identical
+   - Automatically normalizes vectors
+
+2. **L2 Distance (Euclidean)**
+   - Measures straight-line distance
+   - Range: [0, ∞)
+   - No normalization applied
+
+3. **Inner Product**
+   - Dot product similarity
+   - Range: (-∞, ∞)
+   - Higher values indicate greater similarity
+
+---
+
+## Performance Characteristics
+
+### Index Build
+
+- Memory usage: ~(4 * dim + 8 * M) bytes per vector
+- Build time: O(N * M * log N) for N vectors
+- Suitable for millions of vectors with hundreds of dimensions
+
+### Query Performance
+
+- Typical recall@10: Greater than 95% with default parameters
+- Query latency: Less than 1ms for 100K vectors, less than 10ms for 1M vectors
+- Scalable to 10M+ vectors per shard
+
+### Tuning Guidelines
+
+**For higher recall:**
+- Increase M (e.g., 32 or 64)
+- Increase ef_construction (e.g., 400)
+- Trade-off: larger memory footprint, slower indexing
+
+**For faster queries:**
+- Decrease ef_search
+- Trade-off: lower recall
+
+**For faster indexing:**
+- Decrease M and ef_construction
+- Trade-off: lower recall
+
+---
+
+## Use Cases
+
+### Semantic Search
+
+```bash
+# Store document embeddings
+VECSET doc:1 768 0.123 -0.456 ...
+VECSET doc:2 768 0.234 -0.567 ...
+
+# Search for similar documents
+VECQUERY index 10 0.111 -0.444 ...
+```
+
+### Image Similarity
+
+```bash
+# Store image feature vectors
+VECSET img:cat.jpg 512 0.91 0.23 ...
+VECSET img:dog.jpg 512 0.87 0.31 ...
+
+# Find similar images
+VECQUERY index 5 0.90 0.25 ...
+```
+
+### Recommendation Systems
+
+```bash
+# Store user/item embeddings
+VECSET user:alice 64 0.5 0.3 ...
+VECSET item:book:123 64 0.4 0.6 ...
+
+# Find similar users or items
+VECQUERY index 20 0.45 0.35 ...
+```
+
+---
+
+## Implementation Notes
+
+- HNSW index is implemented per-shard with no cross-shard coordination
+- Vectors are stored in-memory for fast access
+- Index structure is optimized for read-heavy workloads
+- Supports concurrent queries without locks
+- Index is not persisted by default (rebuild on restart)
+
+---
+
+## Comparison with Redis
+
+Kora's vector search is similar to RediSearch's vector capabilities but with key differences:
+
+- Kora uses pure HNSW (no flat index fallback)
+- Lower memory overhead per vector
+- Better multi-threaded query performance due to shard-affinity
+- Simpler command interface (no FT. prefix)
+- No persistence of vector index (in-memory only)

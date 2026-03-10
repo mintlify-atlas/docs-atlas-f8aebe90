@@ -1,0 +1,373 @@
+---
+title: Contributing
+description: Guidelines for contributing to Kora
+---
+
+Thanks for your interest in contributing to Kora! This guide covers development setup, code standards, testing requirements, and the pull request process.
+
+## Getting Started
+
+1. **Fork the repository** on GitHub
+2. **Clone your fork**:
+   ```bash
+   git clone https://github.com/<your-username>/Kora.git
+   cd Kora
+   ```
+3. **Create a feature branch**:
+   ```bash
+   git checkout -b feat/your-feature
+   ```
+4. **Make your changes**
+5. **Submit a pull request**
+
+## Development Setup
+
+### Prerequisites
+
+- Rust 1.82+ (edition 2021)
+- Git
+
+Install Rust via [rustup](https://rustup.rs/):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### Build the Workspace
+
+```bash
+cargo build
+```
+
+### Run Tests
+
+```bash
+cargo test --workspace
+```
+
+### Run Lints
+
+```bash
+cargo clippy --workspace --all-targets
+```
+
+### Format Code
+
+```bash
+cargo fmt --all
+```
+
+## Code Standards
+
+All contributions must meet these standards:
+
+### Clippy and Formatting
+
+- **All code must pass `cargo clippy` with zero warnings**
+- **All code must be formatted with `cargo fmt`**
+- **All tests must pass before submitting a PR**
+
+### Documentation
+
+- **Public items should have doc comments** (`///`)
+- Use clear, concise language
+- Include examples where helpful
+- Document error conditions and panics
+
+### Error Handling
+
+- Use `thiserror` for library error types
+- Never use `unsafe` without a `// SAFETY:` comment explaining the invariants
+- Avoid `unwrap()` and `expect()` in library code unless the invariant is provably guaranteed
+
+### Performance
+
+- **Avoid allocations in hot paths**
+- Profile before optimizing
+- Use benchmarks to validate performance improvements
+
+### Rust Style
+
+- Follow standard Rust naming conventions:
+  - `snake_case` for functions and variables
+  - `PascalCase` for types and traits
+  - `SCREAMING_SNAKE_CASE` for constants
+- Use default `rustfmt` settings
+- Prefer explicit types over `auto` when it improves clarity
+
+## Architecture Rules
+
+These rules are non-negotiable and must be followed:
+
+### Dependency Graph
+
+- **`kora-core` has zero internal workspace dependencies** — keep it that way
+- The dependency graph is strictly acyclic:
+  ```
+  cli → server → core, protocol, storage, vector, cdc, pubsub, observability, doc
+  embedded → core, storage, vector, cdc, observability
+  ```
+- Never introduce circular dependencies between crates
+
+### Shard-Affinity Design
+
+- **Each shard worker owns its data and I/O** — no locks on the data path
+- Use message passing via channels for cross-shard communication
+- Store access uses `Rc<RefCell<>>` (no locks) within a shard
+- Cross-shard communication uses `tokio::sync::mpsc` + `oneshot`
+
+### Lock-Free Data Path
+
+- **Do not add locks to the data path**
+- If you need shared state, use message passing
+- Follow the existing shard-affinity patterns
+
+### RESP2 Compatibility
+
+- **Do not deviate from expected RESP2 command semantics** without explicit discussion
+- Match Redis behavior for standard commands where applicable
+
+## Testing
+
+All new functionality must include tests.
+
+### Unit Tests
+
+Place unit tests in `#[cfg(test)] mod tests {}` blocks:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_basic_set_get() {
+        let db = Database::open(Config { shard_count: 2 });
+        db.set("hello", b"world");
+        assert_eq!(db.get("hello"), Some(b"world".to_vec()));
+    }
+}
+```
+
+### Integration Tests
+
+Place integration tests in `tests/` directories within each crate:
+
+```
+kora-core/
+├── src/
+└── tests/
+    ├── stress.rs
+    └── integration.rs
+```
+
+### Benchmarks
+
+Use Criterion for benchmarks in `benches/` directories:
+
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn benchmark_set(c: &mut Criterion) {
+    let db = Database::open(Config::default());
+    c.bench_function("set", |b| {
+        b.iter(|| db.set("key", black_box(b"value")));
+    });
+}
+
+criterion_group!(benches, benchmark_set);
+criterion_main!(benches);
+```
+
+### Running Tests
+
+Before submitting a PR, run the full test suite:
+
+```bash
+cargo fmt --all && \
+cargo clippy --workspace --all-targets && \
+cargo test --workspace
+```
+
+## Commit Messages
+
+Use the format: `type: description`
+
+### Types
+
+- `feat` — new feature
+- `fix` — bug fix
+- `refactor` — code refactoring
+- `docs` — documentation changes
+- `test` — test additions or updates
+- `perf` — performance improvements
+- `chore` — maintenance tasks
+
+### Examples
+
+```
+feat: add vector search command
+fix: prevent deadlock in shard worker shutdown
+refactor: simplify RESP parser state machine
+docs: update embedded mode examples
+test: add stress test for concurrent writes
+perf: optimize hash lookup with SIMD
+chore: update dependencies
+```
+
+### Best Practices
+
+- **Keep commits focused** — one logical change per commit
+- Summarize the "why" rather than the "what"
+- Keep the first line under 72 characters
+- Add details in the commit body if needed
+
+## Pull Requests
+
+### Before Submitting
+
+1. **Run the full test suite**:
+   ```bash
+   cargo fmt --all && \
+   cargo clippy --workspace --all-targets && \
+   cargo test --workspace
+   ```
+
+2. **Ensure all tests pass**
+
+3. **Rebase on main** to avoid merge conflicts:
+   ```bash
+   git fetch upstream
+   git rebase upstream/main
+   ```
+
+### PR Guidelines
+
+- **Keep PRs focused on a single change**
+- Include tests for new functionality
+- Update documentation if behavior changes
+- Reference any related issues (e.g., "Closes #123")
+- Provide a clear description of what the PR does and why
+
+### PR Template
+
+```markdown
+## Summary
+
+Brief description of the change.
+
+## Changes
+
+- Added X feature
+- Fixed Y bug
+- Refactored Z component
+
+## Testing
+
+- Added unit tests in `kora-core/src/tests.rs`
+- Ran integration tests: `cargo test --test integration`
+- Benchmarked performance impact
+
+## Related Issues
+
+Closes #123
+```
+
+### Review Process
+
+1. A maintainer will review your PR
+2. Address any feedback or requested changes
+3. Once approved, your PR will be merged
+
+## Reporting Bugs
+
+Open an issue on GitHub with:
+
+- **Steps to reproduce** the bug
+- **Expected behavior** vs. **actual behavior**
+- Kora version (or git commit hash)
+- Platform (OS, architecture)
+- Relevant logs or error messages
+
+### Example
+
+```markdown
+## Bug Description
+
+SET command with TTL expires immediately instead of after the specified duration.
+
+## Steps to Reproduce
+
+1. Start Kora: `cargo run -- --port 6379 --workers 4`
+2. Connect with redis-cli: `redis-cli -p 6379`
+3. Run: `SET key value EX 60`
+4. Immediately run: `TTL key`
+
+## Expected Behavior
+
+TTL should return approximately 60 seconds.
+
+## Actual Behavior
+
+TTL returns -2 (key does not exist).
+
+## Environment
+
+- Kora version: `0.1.0` (commit `abc123`)
+- OS: Ubuntu 22.04
+- Rust: 1.82.0
+```
+
+## Feature Requests
+
+Open an issue with:
+
+- Clear description of the feature
+- Use case or problem it solves
+- Proposed API or implementation (if applicable)
+
+## Security Issues
+
+**Do not open public issues for security vulnerabilities.**
+
+See [SECURITY.md](https://github.com/Augani/Kora/blob/main/SECURITY.md) for responsible disclosure instructions.
+
+## Code Review Checklist
+
+Before submitting your PR, verify:
+
+- [ ] All tests pass: `cargo test --workspace`
+- [ ] No Clippy warnings: `cargo clippy --workspace --all-targets`
+- [ ] Code is formatted: `cargo fmt --all`
+- [ ] Public items have doc comments
+- [ ] Tests cover new functionality
+- [ ] Documentation updated if behavior changed
+- [ ] Commit messages follow conventions
+- [ ] No circular dependencies introduced
+- [ ] No locks added to data path
+- [ ] RESP2 semantics preserved (if applicable)
+
+## Community Guidelines
+
+- Be respectful and constructive
+- Assume good intent
+- Ask questions if something is unclear
+- Help others in issues and discussions
+
+## Getting Help
+
+If you need help contributing:
+
+- Open a [discussion](https://github.com/Augani/Kora/discussions) on GitHub
+- Ask questions in your PR
+- Reach out to maintainers
+
+## License
+
+By contributing to Kora, you agree that your contributions will be licensed under the [MIT License](https://github.com/Augani/Kora/blob/main/LICENSE).
+
+## Next Steps
+
+- [Building from Source](/development/building-from-source) — build and test the workspace
+- [Embedded Mode](/development/embedded-mode) — use Kora as a library
+- [Architecture](/concepts/architecture) — understand the design principles
