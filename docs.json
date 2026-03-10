@@ -7,11 +7,7 @@
     "light": "#545454",
     "dark": "#94cb04"
   },
-  "favicon": "/logo.png",
-  "logo": {
-    "light": "/logo.png",
-    "dark": "/logo.png"
-  },
+
   "navbar": {
     "primary": {
       "type": "github",
@@ -86,6 +82,9 @@
               "api/list-commands",
               "api/hash-commands",
               "api/set-commands",
+              "api/sorted-set-commands",
+              "api/stream-commands",
+              "api/advanced-commands",
               "api/document-commands",
               "api/vector-commands",
               "api/cdc-commands",

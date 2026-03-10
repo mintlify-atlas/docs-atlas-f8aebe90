@@ -1,0 +1,876 @@
+---
+title: 'Advanced Commands'
+description: 'Bitmap, HyperLogLog, Geospatial, Blocking, and Object Inspection commands'
+---
+
+This page documents advanced Redis-compatible commands for specialized data structures and operations.
+
+---
+
+## Bitmap Commands
+
+Bitmaps are string values treated as arrays of bits. They're efficient for storing binary flags and performing bitwise operations.
+
+### SETBIT
+
+Set or clear the bit at a specific offset in the string value.
+
+**Syntax:**
+```
+SETBIT key offset value
+```
+
+**Parameters:**
+- `key`: The key holding the bitmap
+- `offset`: Bit position (0-based, u64)
+- `value`: 0 or 1
+
+**Return value:**
+Integer reply: the original bit value stored at `offset`
+
+**Time complexity:** O(1)
+
+**Example:**
+```bash
+redis> SETBIT mykey 7 1
+(integer) 0
+redis> SETBIT mykey 7 0
+(integer) 1
+redis> GETBIT mykey 7
+(integer) 0
+```
+
+---
+
+### GETBIT
+
+Get the bit value at a specific offset in the string value.
+
+**Syntax:**
+```
+GETBIT key offset
+```
+
+**Parameters:**
+- `key`: The key holding the bitmap
+- `offset`: Bit position (0-based, u64)
+
+**Return value:**
+Integer reply: the bit value (0 or 1) at `offset`, or 0 if the key doesn't exist or `offset` is beyond the string length
+
+**Time complexity:** O(1)
+
+**Example:**
+```bash
+redis> SETBIT mykey 7 1
+(integer) 0
+redis> GETBIT mykey 7
+(integer) 1
+redis> GETBIT mykey 100
+(integer) 0
+```
+
+---
+
+### BITCOUNT
+
+Count the number of set bits (1s) in a string.
+
+**Syntax:**
+```
+BITCOUNT key [start end [BYTE|BIT]]
+```
+
+**Parameters:**
+- `key`: The key holding the bitmap
+- `start` (optional): Start offset (can be negative for reverse indexing)
+- `end` (optional): End offset (inclusive, can be negative)
+- `BYTE|BIT` (optional): Interpret offsets as byte (default) or bit positions
+
+**Return value:**
+Integer reply: the number of bits set to 1
+
+**Time complexity:** O(N) where N is the number of bytes (or bits if BIT is specified) in the range
+
+**Example:**
+```bash
+redis> SET mykey "foobar"
+OK
+redis> BITCOUNT mykey
+(integer) 26
+redis> BITCOUNT mykey 0 0
+(integer) 4
+redis> BITCOUNT mykey 1 1
+(integer) 6
+redis> BITCOUNT mykey 0 7 BIT
+(integer) 4
+```
+
+---
+
+### BITOP
+
+Perform bitwise operations between strings.
+
+**Syntax:**
+```
+BITOP operation destkey key [key ...]
+```
+
+**Parameters:**
+- `operation`: AND, OR, XOR, or NOT
+- `destkey`: Destination key for the result
+- `key`: One or more source keys (NOT accepts only one source)
+
+**Return value:**
+Integer reply: the size of the string stored in the destination key (equal to the longest input string)
+
+**Time complexity:** O(N) where N is the length of the longest string
+
+**Example:**
+```bash
+redis> SET key1 "foobar"
+OK
+redis> SET key2 "abcdef"
+OK
+redis> BITOP AND dest key1 key2
+(integer) 6
+redis> GET dest
+"``bc`b"
+redis> BITOP OR dest key1 key2
+(integer) 6
+redis> BITOP XOR dest key1 key2
+(integer) 6
+redis> BITOP NOT dest key1
+(integer) 6
+```
+
+---
+
+### BITPOS
+
+Find the first bit set to 0 or 1 in a string.
+
+**Syntax:**
+```
+BITPOS key bit [start [end [BYTE|BIT]]]
+```
+
+**Parameters:**
+- `key`: The key holding the bitmap
+- `bit`: 0 or 1 (the bit value to search for)
+- `start` (optional): Start offset (can be negative)
+- `end` (optional): End offset (inclusive, can be negative)
+- `BYTE|BIT` (optional): Interpret offsets as byte (default) or bit positions
+
+**Return value:**
+Integer reply: the position of the first bit set to the specified value. Returns -1 if the bit is not found. When searching for bit 0 without an explicit end, returns the position after the last byte if not found.
+
+**Time complexity:** O(N) where N is the number of bytes (or bits) in the range
+
+**Example:**
+```bash
+redis> SET mykey "\xff\xf0\x00"
+OK
+redis> BITPOS mykey 0
+(integer) 12
+redis> BITPOS mykey 1
+(integer) 0
+redis> SET mykey "\x00\xff\xf0"
+OK
+redis> BITPOS mykey 1 0
+(integer) 8
+redis> BITPOS mykey 1 2
+(integer) 16
+redis> BITPOS mykey 0 16 31 BIT
+(integer) 20
+```
+
+---
+
+### BITFIELD
+
+Perform arbitrary bit field integer operations on strings.
+
+**Syntax:**
+```
+BITFIELD key [GET encoding offset] [SET encoding offset value] [INCRBY encoding offset increment] [OVERFLOW WRAP|SAT|FAIL]
+```
+
+**Parameters:**
+- `key`: The key holding the bitmap
+- `GET encoding offset`: Read a signed/unsigned integer at offset
+- `SET encoding offset value`: Set a signed/unsigned integer at offset
+- `INCRBY encoding offset increment`: Increment a signed/unsigned integer at offset
+- `OVERFLOW mode`: Set overflow behavior (WRAP, SAT, or FAIL)
+
+**Encoding format:** `i<bits>` for signed, `u<bits>` for unsigned (e.g., `i8`, `u16`)
+
+**Offset format:** Absolute bit offset or `#N` for type-scaled offset (multiplied by encoding width)
+
+**Return value:**
+Array reply: array of integers for each GET, SET, or INCRBY subcommand. SET returns the old value, INCRBY returns the new value. Operations with OVERFLOW FAIL that fail return nil.
+
+**Time complexity:** O(1) for each subcommand
+
+**Example:**
+```bash
+redis> BITFIELD mykey SET i8 0 100 GET i8 0
+1) (integer) 0
+2) (integer) 100
+redis> BITFIELD mykey INCRBY i8 0 1
+1) (integer) 101
+redis> BITFIELD mykey INCRBY i8 0 200
+1) (integer) 45
+redis> BITFIELD mykey OVERFLOW SAT INCRBY i8 0 200
+1) (integer) 127
+redis> BITFIELD mykey OVERFLOW FAIL INCRBY i8 0 200
+1) (nil)
+redis> BITFIELD mykey GET u4 0 GET u4 #1
+1) (integer) 7
+2) (integer) 15
+```
+
+---
+
+## HyperLogLog Commands
+
+HyperLogLog is a probabilistic data structure for counting unique elements with minimal memory overhead (~12KB per key). It provides approximate cardinality with ~0.81% standard error.
+
+### PFADD
+
+Add elements to a HyperLogLog.
+
+**Syntax:**
+```
+PFADD key element [element ...]
+```
+
+**Parameters:**
+- `key`: The HyperLogLog key
+- `element`: One or more elements to add
+
+**Return value:**
+Integer reply: 1 if at least one internal register was altered, 0 otherwise
+
+**Time complexity:** O(N) where N is the number of elements
+
+**Example:**
+```bash
+redis> PFADD hll a b c d e f g
+(integer) 1
+redis> PFCOUNT hll
+(integer) 7
+redis> PFADD hll a b c
+(integer) 0
+redis> PFCOUNT hll
+(integer) 7
+```
+
+---
+
+### PFCOUNT
+
+Return the approximated cardinality of a HyperLogLog.
+
+**Syntax:**
+```
+PFCOUNT key [key ...]
+```
+
+**Parameters:**
+- `key`: One or more HyperLogLog keys. When multiple keys are specified, returns the cardinality of the union.
+
+**Return value:**
+Integer reply: the approximated number of unique elements observed
+
+**Time complexity:** O(1) for a single key, O(N) for N keys (merging required)
+
+**Example:**
+```bash
+redis> PFADD hll1 foo bar zap
+(integer) 1
+redis> PFADD hll2 a b c foo
+(integer) 1
+redis> PFCOUNT hll1
+(integer) 3
+redis> PFCOUNT hll2
+(integer) 4
+redis> PFCOUNT hll1 hll2
+(integer) 6
+```
+
+---
+
+### PFMERGE
+
+Merge multiple HyperLogLogs into one.
+
+**Syntax:**
+```
+PFMERGE destkey sourcekey [sourcekey ...]
+```
+
+**Parameters:**
+- `destkey`: Destination HyperLogLog key (will be created or overwritten)
+- `sourcekey`: One or more source HyperLogLog keys to merge
+
+**Return value:**
+Simple string reply: OK
+
+**Time complexity:** O(N) where N is the number of source keys
+
+**Example:**
+```bash
+redis> PFADD hll1 foo bar zap a
+(integer) 1
+redis> PFADD hll2 a b c foo
+(integer) 1
+redis> PFMERGE hll3 hll1 hll2
+OK
+redis> PFCOUNT hll3
+(integer) 6
+```
+
+---
+
+## Geospatial Commands
+
+Geospatial commands store and query geographic coordinates using sorted sets with geohash encoding.
+
+### GEOADD
+
+Add one or more geospatial items (longitude, latitude, member) to a key.
+
+**Syntax:**
+```
+GEOADD key [NX|XX] [CH] longitude latitude member [longitude latitude member ...]
+```
+
+**Parameters:**
+- `key`: The geospatial index key (stored as a sorted set)
+- `NX`: Only add new elements, don't update existing ones
+- `XX`: Only update existing elements, don't add new ones
+- `CH`: Return the count of changed elements instead of added elements
+- `longitude`: Longitude coordinate (-180 to 180)
+- `latitude`: Latitude coordinate (-85.05112878 to 85.05112878)
+- `member`: Member name
+
+**Return value:**
+Integer reply: the number of elements added (or changed if CH is specified). Elements already existing are not counted unless updated.
+
+**Time complexity:** O(log(N)) for each item added, where N is the number of elements in the sorted set
+
+**Example:**
+```bash
+redis> GEOADD locations 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
+(integer) 2
+redis> GEOADD locations 13.361389 38.115556 "Palermo"
+(integer) 0
+redis> GEOADD locations XX CH 13.361389 38.115556 "Palermo"
+(integer) 0
+redis> GEOADD locations NX 12.496365 41.902782 "Rome"
+(integer) 1
+```
+
+---
+
+### GEODIST
+
+Return the distance between two members of a geospatial index.
+
+**Syntax:**
+```
+GEODIST key member1 member2 [m|km|ft|mi]
+```
+
+**Parameters:**
+- `key`: The geospatial index key
+- `member1`: First member name
+- `member2`: Second member name
+- `unit` (optional): Distance unit - m (meters, default), km (kilometers), ft (feet), mi (miles)
+
+**Return value:**
+Bulk string reply: the distance as a formatted string, or nil if one or both members are missing
+
+**Time complexity:** O(log(N)) where N is the number of elements in the sorted set
+
+**Example:**
+```bash
+redis> GEOADD locations 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
+(integer) 2
+redis> GEODIST locations Palermo Catania
+"166274.1516"
+redis> GEODIST locations Palermo Catania km
+"166.2742"
+redis> GEODIST locations Palermo Catania mi
+"103.3182"
+redis> GEODIST locations Foo Bar
+(nil)
+```
+
+---
+
+### GEOHASH
+
+Return geohash strings for one or more members.
+
+**Syntax:**
+```
+GEOHASH key member [member ...]
+```
+
+**Parameters:**
+- `key`: The geospatial index key
+- `member`: One or more member names
+
+**Return value:**
+Array reply: array of geohash strings in the same order as the requested members. Returns nil for missing members.
+
+**Time complexity:** O(log(N)) for each member, where N is the number of elements in the sorted set
+
+**Example:**
+```bash
+redis> GEOADD locations 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
+(integer) 2
+redis> GEOHASH locations Palermo Catania
+1) "sqc8b49rny0"
+2) "sqdtr74hyu0"
+redis> GEOHASH locations NonExisting
+1) (nil)
+```
+
+---
+
+### GEOPOS
+
+Return longitude and latitude of one or more members.
+
+**Syntax:**
+```
+GEOPOS key member [member ...]
+```
+
+**Parameters:**
+- `key`: The geospatial index key
+- `member`: One or more member names
+
+**Return value:**
+Array reply: array of coordinate pairs \[longitude, latitude\] in the same order as the requested members. Returns nil for missing members.
+
+**Time complexity:** O(log(N)) for each member, where N is the number of elements in the sorted set
+
+**Example:**
+```bash
+redis> GEOADD locations 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania"
+(integer) 2
+redis> GEOPOS locations Palermo Catania NonExisting
+1) 1) "13.361389"
+   2) "38.115556"
+2) 1) "15.087269"
+   2) "37.502669"
+3) (nil)
+```
+
+---
+
+### GEOSEARCH
+
+Search for members within a radius from a center point.
+
+**Syntax:**
+```
+GEOSEARCH key FROMMEMBER member | FROMLONLAT longitude latitude BYRADIUS radius m|km|ft|mi [ASC|DESC] [COUNT count] [WITHCOORD] [WITHDIST] [WITHHASH]
+```
+
+**Parameters:**
+- `key`: The geospatial index key
+- `FROMMEMBER member`: Search from an existing member's position
+- `FROMLONLAT longitude latitude`: Search from a longitude/latitude point
+- `BYRADIUS radius unit`: Search within a radius (m, km, ft, mi)
+- `ASC|DESC` (optional): Sort results by distance ascending or descending
+- `COUNT count` (optional): Limit the number of results
+- `WITHCOORD`: Include coordinates in the result
+- `WITHDIST`: Include distance from center in the result
+- `WITHHASH`: Include geohash integer in the result
+
+**Return value:**
+Array reply: array of matching members. Without modifiers, returns member names. With modifiers, returns arrays containing the member name plus the requested additional information.
+
+**Time complexity:** O(N+log(M)) where N is the number of elements in the circular area and M is the number of items in the sorted set
+
+**Example:**
+```bash
+redis> GEOADD locations 13.361389 38.115556 "Palermo" 15.087269 37.502669 "Catania" 12.496365 41.902782 "Rome"
+(integer) 3
+redis> GEOSEARCH locations FROMLONLAT 15 37 BYRADIUS 200 km ASC
+1) "Catania"
+2) "Palermo"
+redis> GEOSEARCH locations FROMMEMBER Palermo BYRADIUS 200 km WITHDIST
+1) 1) "Palermo"
+   2) "0.0000"
+2) 1) "Catania"
+   2) "166.2742"
+redis> GEOSEARCH locations FROMMEMBER Palermo BYRADIUS 200 km WITHCOORD WITHDIST COUNT 1
+1) 1) "Palermo"
+   2) "0.0000"
+   3) 1) "13.361389"
+      2) "38.115556"
+```
+
+---
+
+## Blocking Commands
+
+Blocking commands wait for data to become available on one or more keys. In Kora's implementation, these commands perform an immediate non-blocking check and return nil if no data is available (timeout=0 behavior).
+
+### BLPOP
+
+Remove and return the first element from the first non-empty list, or block until one is available.
+
+**Syntax:**
+```
+BLPOP key [key ...] timeout
+```
+
+**Parameters:**
+- `key`: One or more list keys to check in order
+- `timeout`: Timeout in seconds (Kora treats this as a non-blocking check regardless of value)
+
+**Return value:**
+Array reply: two-element array with the key name and the popped value, or nil if no element is available
+
+**Time complexity:** O(N) where N is the number of provided keys
+
+**Example:**
+```bash
+redis> RPUSH list1 a b c
+(integer) 3
+redis> BLPOP list1 list2 0
+1) "list1"
+2) "a"
+redis> BLPOP list1 list2 0
+1) "list1"
+2) "b"
+redis> BLPOP empty_list 0
+(nil)
+```
+
+---
+
+### BRPOP
+
+Remove and return the last element from the first non-empty list, or block until one is available.
+
+**Syntax:**
+```
+BRPOP key [key ...] timeout
+```
+
+**Parameters:**
+- `key`: One or more list keys to check in order
+- `timeout`: Timeout in seconds (Kora treats this as a non-blocking check regardless of value)
+
+**Return value:**
+Array reply: two-element array with the key name and the popped value, or nil if no element is available
+
+**Time complexity:** O(N) where N is the number of provided keys
+
+**Example:**
+```bash
+redis> RPUSH list1 a b c
+(integer) 3
+redis> BRPOP list1 list2 0
+1) "list1"
+2) "c"
+redis> BRPOP list1 list2 0
+1) "list1"
+2) "b"
+redis> BRPOP empty_list 0
+(nil)
+```
+
+---
+
+### BLMOVE
+
+Pop an element from a source list and push it to a destination list, or block until an element is available.
+
+**Syntax:**
+```
+BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout
+```
+
+**Parameters:**
+- `source`: Source list key
+- `destination`: Destination list key
+- First `LEFT|RIGHT`: Pop from LEFT (head) or RIGHT (tail) of source
+- Second `LEFT|RIGHT`: Push to LEFT (head) or RIGHT (tail) of destination
+- `timeout`: Timeout in seconds (Kora treats this as a non-blocking check regardless of value)
+
+**Return value:**
+Bulk string reply: the element being popped and pushed, or nil if no element is available
+
+**Time complexity:** O(1)
+
+**Example:**
+```bash
+redis> RPUSH list1 a b c
+(integer) 3
+redis> BLMOVE list1 list2 RIGHT LEFT 0
+"c"
+redis> LRANGE list1 0 -1
+1) "a"
+2) "b"
+redis> LRANGE list2 0 -1
+1) "c"
+redis> BLMOVE list1 list2 LEFT RIGHT 0
+"a"
+redis> LRANGE list2 0 -1
+1) "c"
+2) "a"
+```
+
+---
+
+### BZPOPMIN
+
+Remove and return the member with the lowest score from the first non-empty sorted set.
+
+**Syntax:**
+```
+BZPOPMIN key [key ...] timeout
+```
+
+**Parameters:**
+- `key`: One or more sorted set keys to check in order
+- `timeout`: Timeout in seconds (Kora treats this as a non-blocking check regardless of value)
+
+**Return value:**
+Array reply: three-element array with the key name, member, and score, or nil if no element is available
+
+**Time complexity:** O(log(N) * M) where N is the number of elements in the first non-empty sorted set and M is the number of keys
+
+**Example:**
+```bash
+redis> ZADD zset1 1 "one" 2 "two" 3 "three"
+(integer) 3
+redis> BZPOPMIN zset1 zset2 0
+1) "zset1"
+2) 1) "one"
+   2) "1"
+redis> BZPOPMIN zset1 zset2 0
+1) "zset1"
+2) 1) "two"
+   2) "2"
+redis> BZPOPMIN empty_zset 0
+(nil)
+```
+
+---
+
+### BZPOPMAX
+
+Remove and return the member with the highest score from the first non-empty sorted set.
+
+**Syntax:**
+```
+BZPOPMAX key [key ...] timeout
+```
+
+**Parameters:**
+- `key`: One or more sorted set keys to check in order
+- `timeout`: Timeout in seconds (Kora treats this as a non-blocking check regardless of value)
+
+**Return value:**
+Array reply: three-element array with the key name, member, and score, or nil if no element is available
+
+**Time complexity:** O(log(N) * M) where N is the number of elements in the first non-empty sorted set and M is the number of keys
+
+**Example:**
+```bash
+redis> ZADD zset1 1 "one" 2 "two" 3 "three"
+(integer) 3
+redis> BZPOPMAX zset1 zset2 0
+1) "zset1"
+2) 1) "three"
+   2) "3"
+redis> BZPOPMAX zset1 zset2 0
+1) "zset1"
+2) 1) "two"
+   2) "2"
+redis> BZPOPMAX empty_zset 0
+(nil)
+```
+
+---
+
+## Object Inspection Commands
+
+These commands provide introspection into key metadata and internal representation.
+
+### OBJECT ENCODING
+
+Return the internal encoding used to store the value at a key.
+
+**Syntax:**
+```
+OBJECT ENCODING key
+```
+
+**Parameters:**
+- `key`: The key to inspect
+
+**Return value:**
+Bulk string reply: the encoding type as a string, or nil if the key doesn't exist
+
+**Possible encodings:**
+- `embstr`: Small string stored inline
+- `raw`: Heap-allocated string
+- `int`: Integer value
+- `linkedlist`: List structure
+- `hashtable`: Hash or set structure
+- `unknown`: Other types
+
+**Time complexity:** O(1)
+
+**Example:**
+```bash
+redis> SET mykey "hello"
+OK
+redis> OBJECT ENCODING mykey
+"embstr"
+redis> SET mykey 12345
+OK
+redis> OBJECT ENCODING mykey
+"int"
+redis> LPUSH mylist "a"
+(integer) 1
+redis> OBJECT ENCODING mylist
+"linkedlist"
+```
+
+---
+
+### OBJECT FREQ
+
+Return the access frequency counter (LFU) for a key.
+
+**Syntax:**
+```
+OBJECT FREQ key
+```
+
+**Parameters:**
+- `key`: The key to inspect
+
+**Return value:**
+Integer reply: the LFU counter value (0-255), or nil if the key doesn't exist
+
+**Time complexity:** O(1)
+
+**Note:** Kora uses an LFU (Least Frequently Used) counter for eviction when memory limits are set. The counter is incremented on access and decayed over time.
+
+**Example:**
+```bash
+redis> SET mykey "hello"
+OK
+redis> OBJECT FREQ mykey
+(integer) 5
+redis> GET mykey
+"hello"
+redis> OBJECT FREQ mykey
+(integer) 6
+```
+
+---
+
+### OBJECT IDLETIME
+
+Return the idle time of a key (seconds since last access).
+
+**Syntax:**
+```
+OBJECT IDLETIME key
+```
+
+**Parameters:**
+- `key`: The key to inspect
+
+**Return value:**
+Integer reply: idle time in seconds, or nil if the key doesn't exist
+
+**Time complexity:** O(1)
+
+**Note:** Kora's current implementation always returns 0 for existing keys as a simplified behavior.
+
+**Example:**
+```bash
+redis> SET mykey "hello"
+OK
+redis> OBJECT IDLETIME mykey
+(integer) 0
+redis> OBJECT IDLETIME nonexisting
+(nil)
+```
+
+---
+
+### OBJECT REFCOUNT
+
+Return the reference count of a key.
+
+**Syntax:**
+```
+OBJECT REFCOUNT key
+```
+
+**Parameters:**
+- `key`: The key to inspect
+
+**Return value:**
+Integer reply: reference count (always 1 in Kora for existing keys), or nil if the key doesn't exist
+
+**Time complexity:** O(1)
+
+**Note:** Kora's implementation always returns 1 for existing keys since values are not shared between multiple keys.
+
+**Example:**
+```bash
+redis> SET mykey "hello"
+OK
+redis> OBJECT REFCOUNT mykey
+(integer) 1
+redis> OBJECT REFCOUNT nonexisting
+(nil)
+```
+
+---
+
+## Notes
+
+### Bitmap Operations
+- Bitmaps are stored as string values and automatically expanded when accessing bits beyond the current length
+- BITFIELD supports integers up to 64 bits (i64/u64)
+- All bitmap operations maintain byte alignment internally
+
+### HyperLogLog Implementation
+- Kora uses a fixed 12KB HyperLogLog register size per key
+- Standard error rate: ~0.81%
+- Memory efficient for counting millions of unique elements
+
+### Geospatial Storage
+- Coordinates are stored as scores in sorted sets using geohash encoding
+- Longitude: -180 to 180 degrees
+- Latitude: -85.05112878 to 85.05112878 degrees (Mercator projection limits)
+- Distance calculations use the Haversine formula
+
+### Blocking Commands Behavior
+- Kora implements blocking commands as immediate non-blocking checks
+- This means they will return immediately with available data or nil
+- True blocking with timeout support may be added in future versions
+
+### Object Inspection
+- These commands are useful for debugging and understanding Kora's internal storage
+- LFU counters are only maintained when memory limits are configured
+- Encoding information can help optimize memory usage

@@ -1,0 +1,874 @@
+---
+title: Stream Commands
+description: Commands for working with Redis streams in Kora
+---
+
+Stream commands provide an append-only log data structure that supports consumer groups for distributed message processing. Kora implements full Redis stream semantics with identical behavior.
+
+## XADD
+
+Add a new entry to a stream.
+
+**Syntax**
+```
+XADD key [MAXLEN count] id field value [field value ...]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="MAXLEN" type="integer">
+  Optional maximum number of entries to keep in the stream (trims oldest entries)
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  Entry ID in format `ms-seq` (milliseconds-sequence), or `*` to auto-generate
+</ParamField>
+
+<ParamField path="field" type="string" required>
+  Field name (one or more field-value pairs required)
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  Field value
+</ParamField>
+
+**Return value**
+
+<ResponseField name="id" type="string">
+  The ID of the added entry
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XADD mystream * sensor-id 1234 temperature 19.8
+"1609459200000-0"
+redis-cli> XADD mystream MAXLEN 1000 * sensor-id 1234 temperature 20.1
+"1609459201000-0"
+redis-cli> XADD mystream 1609459202000-0 sensor-id 1234 temperature 20.5
+"1609459202000-0"
+```
+
+**Time complexity:** O(1) when adding a single entry, O(N) when trimming with MAXLEN where N is the number of evicted entries
+
+**Implementation details:**
+- Auto-generated IDs use current Unix timestamp in milliseconds with sequence number
+- IDs must be monotonically increasing
+- Supports MAXLEN for automatic stream trimming
+- Stream is created automatically if it doesn't exist
+
+---
+
+## XLEN
+
+Get the number of entries in a stream.
+
+**Syntax**
+```
+XLEN key
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+**Return value**
+
+<ResponseField name="length" type="integer">
+  The number of entries in the stream, or 0 if the key does not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XLEN mystream
+(integer) 1
+redis-cli> XLEN nonexistent
+(integer) 0
+```
+
+**Time complexity:** O(1)
+
+---
+
+## XRANGE
+
+Query a range of stream entries by ID.
+
+**Syntax**
+```
+XRANGE key start end [COUNT count]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="start" type="string" required>
+  Minimum entry ID (use `-` for the smallest ID in the stream)
+</ParamField>
+
+<ParamField path="end" type="string" required>
+  Maximum entry ID (use `+` for the largest ID in the stream)
+</ParamField>
+
+<ParamField path="COUNT" type="integer">
+  Maximum number of entries to return
+</ParamField>
+
+**Return value**
+
+<ResponseField name="entries" type="array">
+  Array of entries, each containing an ID and field-value pairs
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XADD mystream * field2 value2
+"1609459201000-0"
+redis-cli> XRANGE mystream - +
+1) 1) "1609459200000-0"
+   2) 1) "field1"
+      2) "value1"
+2) 1) "1609459201000-0"
+   2) 1) "field2"
+      2) "value2"
+redis-cli> XRANGE mystream - + COUNT 1
+1) 1) "1609459200000-0"
+   2) 1) "field1"
+      2) "value1"
+```
+
+**Time complexity:** O(N+M) where N is the number of entries in the stream and M is the number of entries returned
+
+**Implementation details:**
+- Returns entries in chronological order (oldest to newest)
+- `-` and `+` are special IDs representing stream bounds
+- Supports COUNT for limiting results
+
+---
+
+## XREVRANGE
+
+Query a range of stream entries in reverse order.
+
+**Syntax**
+```
+XREVRANGE key end start [COUNT count]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="end" type="string" required>
+  Maximum entry ID (use `+` for the largest ID in the stream)
+</ParamField>
+
+<ParamField path="start" type="string" required>
+  Minimum entry ID (use `-` for the smallest ID in the stream)
+</ParamField>
+
+<ParamField path="COUNT" type="integer">
+  Maximum number of entries to return
+</ParamField>
+
+**Return value**
+
+<ResponseField name="entries" type="array">
+  Array of entries in reverse chronological order
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XADD mystream * field2 value2
+"1609459201000-0"
+redis-cli> XREVRANGE mystream + -
+1) 1) "1609459201000-0"
+   2) 1) "field2"
+      2) "value2"
+2) 1) "1609459200000-0"
+   2) 1) "field1"
+      2) "value1"
+```
+
+**Time complexity:** O(N+M) where N is the number of entries in the stream and M is the number of entries returned
+
+---
+
+## XREAD
+
+Read entries from one or more streams.
+
+**Syntax**
+```
+XREAD [COUNT count] STREAMS key [key ...] id [id ...]
+```
+
+<ParamField path="COUNT" type="integer">
+  Maximum number of entries to return per stream
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  One or more stream keys
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  Start ID for each stream (use `$` for new entries only)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="streams" type="array">
+  Array of streams with their entries, or null if no new entries
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XADD stream1 * field1 value1
+"1609459200000-0"
+redis-cli> XREAD STREAMS stream1 0-0
+1) 1) "stream1"
+   2) 1) 1) "1609459200000-0"
+         2) 1) "field1"
+            2) "value1"
+redis-cli> XREAD COUNT 1 STREAMS stream1 stream2 0-0 0-0
+```
+
+**Time complexity:** O(N) where N is the number of entries returned
+
+**Implementation details:**
+- Number of keys must match number of IDs
+- `$` special ID means "only new entries added after this call"
+- Returns null when no new entries are available
+
+---
+
+## XTRIM
+
+Trim the stream to a maximum length.
+
+**Syntax**
+```
+XTRIM key MAXLEN count
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="MAXLEN" type="integer" required>
+  Maximum number of entries to keep (oldest entries are removed)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="trimmed" type="integer">
+  The number of entries removed from the stream
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XADD mystream * field2 value2
+"1609459201000-0"
+redis-cli> XADD mystream * field3 value3
+"1609459202000-0"
+redis-cli> XTRIM mystream MAXLEN 2
+(integer) 1
+redis-cli> XLEN mystream
+(integer) 2
+```
+
+**Time complexity:** O(N) where N is the number of entries evicted
+
+---
+
+## XDEL
+
+Delete entries from a stream by ID.
+
+**Syntax**
+```
+XDEL key id [id ...]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  One or more entry IDs to delete
+</ParamField>
+
+**Return value**
+
+<ResponseField name="deleted" type="integer">
+  The number of entries actually deleted
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XADD mystream * field2 value2
+"1609459201000-0"
+redis-cli> XDEL mystream 1609459200000-0
+(integer) 1
+redis-cli> XLEN mystream
+(integer) 1
+```
+
+**Time complexity:** O(M*N) where M is the number of IDs to delete and N is the number of entries in the stream
+
+**Implementation details:**
+- Non-existent IDs are ignored
+- Returns count of successfully deleted entries
+
+---
+
+## XGROUP CREATE
+
+Create a consumer group for a stream.
+
+**Syntax**
+```
+XGROUP CREATE key group id [MKSTREAM]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  Starting ID (`0` for all entries, `$` for new entries only)
+</ParamField>
+
+<ParamField path="MKSTREAM" type="flag">
+  Create the stream if it doesn't exist
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="string">
+  OK if the group was created successfully
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $ MKSTREAM
+OK
+redis-cli> XGROUP CREATE mystream readers 0
+OK
+```
+
+**Time complexity:** O(1)
+
+**Implementation details:**
+- Returns error if group already exists
+- `$` means start from the last ID in the stream
+- `0` or `0-0` means start from the beginning
+- MKSTREAM creates the stream if it doesn't exist
+
+---
+
+## XGROUP DESTROY
+
+Destroy a consumer group.
+
+**Syntax**
+```
+XGROUP DESTROY key group
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name to destroy
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="integer">
+  1 if the group was destroyed, 0 if it did not exist
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $
+OK
+redis-cli> XGROUP DESTROY mystream mygroup
+(integer) 1
+redis-cli> XGROUP DESTROY mystream nonexistent
+(integer) 0
+```
+
+**Time complexity:** O(N) where N is the number of pending entries in the group
+
+---
+
+## XGROUP DELCONSUMER
+
+Delete a consumer from a consumer group.
+
+**Syntax**
+```
+XGROUP DELCONSUMER key group consumer
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name
+</ParamField>
+
+<ParamField path="consumer" type="string" required>
+  Consumer name to delete
+</ParamField>
+
+**Return value**
+
+<ResponseField name="pending" type="integer">
+  The number of pending messages that the consumer had before deletion
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $
+OK
+redis-cli> XREADGROUP GROUP mygroup consumer1 STREAMS mystream >
+(empty array)
+redis-cli> XGROUP DELCONSUMER mystream mygroup consumer1
+(integer) 0
+```
+
+**Time complexity:** O(1)
+
+---
+
+## XREADGROUP
+
+Read entries from a stream as part of a consumer group.
+
+**Syntax**
+```
+XREADGROUP GROUP group consumer [COUNT count] STREAMS key [key ...] id [id ...]
+```
+
+<ParamField path="GROUP" type="keyword" required>
+  Keyword indicating consumer group read
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name
+</ParamField>
+
+<ParamField path="consumer" type="string" required>
+  Consumer name within the group
+</ParamField>
+
+<ParamField path="COUNT" type="integer">
+  Maximum number of entries to return per stream
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  One or more stream keys
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  Start ID for each stream (use `>` for new entries only, or a specific ID to read pending messages)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="streams" type="array">
+  Array of streams with their entries, or null if no entries available
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $
+OK
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XREADGROUP GROUP mygroup consumer1 STREAMS mystream >
+1) 1) "mystream"
+   2) 1) 1) "1609459200000-0"
+         2) 1) "field1"
+            2) "value1"
+```
+
+**Time complexity:** O(M) where M is the number of entries returned
+
+**Implementation details:**
+- `>` means fetch only new messages never delivered to any consumer
+- Specific ID returns pending messages for this consumer
+- Messages are added to the Pending Entries List (PEL)
+- Creates consumer automatically if it doesn't exist
+- Messages must be acknowledged with XACK
+
+---
+
+## XACK
+
+Acknowledge processed messages in a consumer group.
+
+**Syntax**
+```
+XACK key group id [id ...]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  One or more entry IDs to acknowledge
+</ParamField>
+
+**Return value**
+
+<ResponseField name="acknowledged" type="integer">
+  The number of messages successfully acknowledged
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $
+OK
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XREADGROUP GROUP mygroup consumer1 STREAMS mystream >
+1) 1) "mystream"
+   2) 1) 1) "1609459200000-0"
+         2) 1) "field1"
+            2) "value1"
+redis-cli> XACK mystream mygroup 1609459200000-0
+(integer) 1
+```
+
+**Time complexity:** O(M) where M is the number of IDs to acknowledge
+
+**Implementation details:**
+- Removes messages from the Pending Entries List (PEL)
+- Non-existent IDs are ignored
+- Returns count of successfully acknowledged messages
+
+---
+
+## XPENDING
+
+Inspect pending messages in a consumer group.
+
+**Syntax**
+```
+XPENDING key group [start end count]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name
+</ParamField>
+
+<ParamField path="start" type="string">
+  Start ID for detailed pending list (use `-` for smallest ID)
+</ParamField>
+
+<ParamField path="end" type="string">
+  End ID for detailed pending list (use `+` for largest ID)
+</ParamField>
+
+<ParamField path="count" type="integer">
+  Maximum number of pending entries to return
+</ParamField>
+
+**Return value**
+
+<ResponseField name="pending" type="array">
+  Summary or detailed list of pending messages depending on arguments provided
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $
+OK
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XREADGROUP GROUP mygroup consumer1 STREAMS mystream >
+1) 1) "mystream"
+   2) 1) 1) "1609459200000-0"
+         2) 1) "field1"
+            2) "value1"
+redis-cli> XPENDING mystream mygroup
+1) (integer) 1
+2) "1609459200000-0"
+3) "1609459200000-0"
+4) 1) 1) "consumer1"
+      2) "1"
+redis-cli> XPENDING mystream mygroup - + 10
+1) 1) "1609459200000-0"
+   2) "consumer1"
+   3) (integer) 123456
+   4) (integer) 1
+```
+
+**Time complexity:** O(N) with start/end/count, O(M) for summary where N is the number of pending entries scanned and M is the number of consumers
+
+**Implementation details:**
+- Without start/end/count: returns summary (total pending, min ID, max ID, consumers)
+- With start/end/count: returns detailed list with ID, consumer, idle time, delivery count
+
+---
+
+## XCLAIM
+
+Claim pending messages from other consumers.
+
+**Syntax**
+```
+XCLAIM key group consumer min-idle-time id [id ...]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name
+</ParamField>
+
+<ParamField path="consumer" type="string" required>
+  Consumer claiming the messages
+</ParamField>
+
+<ParamField path="min-idle-time" type="integer" required>
+  Minimum idle time in milliseconds (only claim messages idle longer than this)
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  One or more entry IDs to claim
+</ParamField>
+
+**Return value**
+
+<ResponseField name="claimed" type="array">
+  Array of successfully claimed messages
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $
+OK
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XREADGROUP GROUP mygroup consumer1 STREAMS mystream >
+1) 1) "mystream"
+   2) 1) 1) "1609459200000-0"
+         2) 1) "field1"
+            2) "value1"
+redis-cli> XCLAIM mystream mygroup consumer2 60000 1609459200000-0
+1) 1) "1609459200000-0"
+   2) 1) "field1"
+      2) "value1"
+```
+
+**Time complexity:** O(M) where M is the number of IDs to claim
+
+**Implementation details:**
+- Only claims messages with idle time >= min-idle-time
+- Increments delivery count
+- Updates delivery time to current time
+- Transfers ownership to the claiming consumer
+
+---
+
+## XAUTOCLAIM
+
+Automatically claim oldest pending messages.
+
+**Syntax**
+```
+XAUTOCLAIM key group consumer min-idle-time start [COUNT count]
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+<ParamField path="group" type="string" required>
+  Consumer group name
+</ParamField>
+
+<ParamField path="consumer" type="string" required>
+  Consumer claiming the messages
+</ParamField>
+
+<ParamField path="min-idle-time" type="integer" required>
+  Minimum idle time in milliseconds
+</ParamField>
+
+<ParamField path="start" type="string" required>
+  Start scanning from this ID (use `0-0` to start from beginning)
+</ParamField>
+
+<ParamField path="COUNT" type="integer">
+  Maximum number of entries to claim (default: 100)
+</ParamField>
+
+**Return value**
+
+<ResponseField name="result" type="array">
+  Array with three elements: next cursor ID, array of claimed messages, array of deleted IDs
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $
+OK
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XREADGROUP GROUP mygroup consumer1 STREAMS mystream >
+1) 1) "mystream"
+   2) 1) 1) "1609459200000-0"
+         2) 1) "field1"
+            2) "value1"
+redis-cli> XAUTOCLAIM mystream mygroup consumer2 60000 0-0 COUNT 10
+1) "0-0"
+2) 1) 1) "1609459200000-0"
+      2) 1) "field1"
+         2) "value1"
+3) (empty array)
+```
+
+**Time complexity:** O(N+M) where N is the number of pending entries scanned and M is the number claimed
+
+**Implementation details:**
+- Scans pending list from start ID
+- Claims messages idle >= min-idle-time
+- Returns next cursor for subsequent calls
+- Default count is 100 entries
+
+---
+
+## XINFO STREAM
+
+Get information about a stream.
+
+**Syntax**
+```
+XINFO STREAM key
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+**Return value**
+
+<ResponseField name="info" type="array">
+  Stream metadata including length, first entry, last entry, last generated ID, and group count
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XADD mystream * field1 value1
+"1609459200000-0"
+redis-cli> XINFO STREAM mystream
+ 1) "length"
+ 2) (integer) 1
+ 3) "first-entry"
+ 4) 1) "1609459200000-0"
+    2) 1) "field1"
+       2) "value1"
+ 5) "last-entry"
+ 6) 1) "1609459200000-0"
+    2) 1) "field1"
+       2) "value1"
+ 7) "last-generated-id"
+ 8) "1609459200000-0"
+ 9) "groups"
+10) (integer) 0
+```
+
+**Time complexity:** O(1)
+
+---
+
+## XINFO GROUPS
+
+Get information about consumer groups for a stream.
+
+**Syntax**
+```
+XINFO GROUPS key
+```
+
+<ParamField path="key" type="string" required>
+  The stream key
+</ParamField>
+
+**Return value**
+
+<ResponseField name="groups" type="array">
+  Array of consumer groups with metadata including name, consumer count, pending count, and last delivered ID
+</ResponseField>
+
+**Examples**
+
+```bash
+redis-cli> XGROUP CREATE mystream mygroup $
+OK
+redis-cli> XINFO GROUPS mystream
+1) 1) "name"
+   2) "mygroup"
+   3) "consumers"
+   4) (integer) 0
+   5) "pending"
+   6) (integer) 0
+   7) "last-delivered-id"
+   8) "0-0"
+```
+
+**Time complexity:** O(N) where N is the number of consumer groups
+
+**Implementation details:**
+- Returns empty array if no groups exist
+- Each group shows: name, consumer count, pending message count, last delivered ID
